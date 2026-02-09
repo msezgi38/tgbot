@@ -7,7 +7,7 @@ import os
 # =============================================================================
 # Telegram Bot Configuration
 # =============================================================================
-TELEGRAM_BOT_TOKEN = "8585205125:AAGvYYdfHJRBqamvqJJKPyLU82xiv1TzLNQ"
+TELEGRAM_BOT_TOKEN = "8419284355:AAFNUKJWVLXqtVIzwjbTW0Jq6dmyHkdxsqE"
 
 # =============================================================================
 # Oxapay Payment Gateway Configuration
