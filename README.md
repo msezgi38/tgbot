@@ -1,440 +1,239 @@
-# Press-1 IVR Bot - SaaS Solution
+# 📞 Spooficon Press One - Vicidial Telegram Bot
 
-Complete Telegram-based SaaS for automated Press-1 IVR campaigns. Users pay with cryptocurrency, upload contact lists, and get real-time campaign results.
+**Professional Press-1 IVR Campaign Management via Telegram**
+
+Modern Telegram interface for Vicidial campaigns with AMD (Answering Machine Detection) support, real-time statistics, and caller ID management.
+
+---
+
+## � Features
+
+### ✨ Campaign Management
+- 🚀 **Launch Campaigns** - Create and start campaigns from Telegram
+- 📊 **Live Statistics** - Real-time campaign monitoring
+- ⏸️ **Pause/Resume** - Full campaign control
+- 📋 **Call Logs** - Detailed call results with timestamps
+
+### 🎤 IVR & Audio
+- 🎙️ **Voice Upload** - Upload IVR messages directly from Telegram
+- 🤖 **AMD Support** - Answering Machine Detection via Vicidial
+- 📂 **Audio Library** - Save and reuse voice files
+- 🔊 **Format Support** - MP3, WAV, OGG, Voice Messages
+
+### 📞 Caller ID Management
+- 🔧 **Configure CID** - Set caller identification
+- 📋 **Preset CIDs** - Verified, high-performance numbers
+- ✏️ **Custom CID** - Use your own numbers with validation
+- 🛡️ **Blacklist Check** - Automatic compliance verification
+
+### 💰 Balance & Credits
+- 💵 **Balance Tracking** - Real-time credit monitoring
+- 📈 **Usage Stats** - Lines used, calls made
+- 💳 **Payment Integration** - Crypto payments via Oxapay (optional)
+
+### 📱 Professional Interface
+- 🎨 **Modern UI** - Clean, intuitive Telegram interface
+- 📊 **Rich Statistics** - Progress bars, charts, detailed metrics
+- 🔔 **Smart Notifications** - Campaign updates and alerts
+- 🌐 **Multi-language Ready** - Easy localization support
+
+---
 
 ## 🏗️ Architecture
 
 ```
-Telegram User → Bot → Oxapay (Payment) → PostgreSQL
-                ↓
-         Campaign Worker → AMI → Asterisk → MagnusBilling → PSTN
-                ↓                    ↓
-         Webhook Server ← DTMF ←─────┘
+Telegram Bot (Interface)
+         ↓
+    AMI + MySQL
+         ↓
+   Vicidial (Engine)
+         ↓
+   Asterisk + AMD
 ```
 
-## ⚡ Features
+**Vicidial as Backend:**
+- ✅ Uses existing Vicidial installation
+- ✅ Minimal changes to Vicidial
+- ✅ Leverages proven AMD system
+- ✅ Full Asterisk integration
 
-- ✅ **Telegram Bot Interface** - Easy campaign management via chat
-- ✅ **Crypto Payments** - Oxapay integration (USDT, BTC, ETH)
-- ✅ **Automated Dialing** - Asterisk AMI with MagnusBilling trunk
-- ✅ **DTMF Detection** - Track when users press '1'
-- ✅ **Real-time Stats** - Campaign progress tracking
-- ✅ **Credit System** - Fair usage billing (1 credit = 1 minute)
+---
 
-## 📋 Prerequisites
+## 📋 Requirements
 
 ### System Requirements
-- **OS**: Linux (Ubuntu 20.04+ recommended) or Windows with WSL
-- **Python**: 3.9+
-- **PostgreSQL**: 12+
-- **Asterisk**: 16+ with PJSIP
-- **RAM**: 4GB minimum, 8GB recommended
-- **Storage**: 20GB+
+- **OS:** AlmaLinux 8/9, Rocky Linux, CentOS 7/8, Ubuntu 20.04+
+- **Python:** 3.11+
+- **RAM:** 2 GB minimum, 4 GB recommended
+- **Disk:** 10 GB free space
 
-### Accounts Needed
-1. **MagnusBilling Account** - SIP trunk provider
-2. **Oxapay Account** - Crypto payment gateway
-3. **Telegram Bot Token** - From @BotFather
+### Vicidial Requirements
+- **Vicidial:** 2.14+
+- **Asterisk:** 13/16/18
+- **MySQL/MariaDB:** 5.7+/ 10.3+
+- **AMI Access:** Enabled
+- **Database Access:** Read/Write permissions
 
-## 🚀 Installation
-
-### Step 1: Clone & Setup
-
+### Python Dependencies
 ```bash
-# Navigate to project directory
-cd c:/Users/msila/Desktop/tgbot
-
-# Create Python virtual environment
-python -m venv venv
-
-# Activate virtual environment
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-# source venv/bin/activate
-
-# Install bot dependencies
-pip install -r bot/requirements.txt
-
-# Install dialer dependencies
-pip install -r dialer/requirements.txt
+python-telegram-bot >= 20.0
+pymysql >= 1.0.2
+asterisk-ami >= 0.1.5
+python-dotenv >= 1.0.0
 ```
 
-### Step 2: Database Setup
+---
 
+## 🚀 Quick Start
+
+### 1. Clone Repository
 ```bash
-# Install PostgreSQL (if not already installed)
-# Windows: Download from https://www.postgresql.org/download/windows/
-# Linux: sudo apt-get install postgresql
-
-# Create database
-psql -U postgres
-CREATE DATABASE ivr_bot;
-\q
-
-# Import schema
-psql -U postgres -d ivr_bot -f database/schema.sql
+cd /opt
+git clone https://github.com/yourusername/tgbot.git
+cd tgbot
 ```
 
-### Step 3: Asterisk Configuration
-
-#### Install Asterisk (Linux)
-
+### 2. Create Virtual Environment
 ```bash
-# Ubuntu/Debian
-sudo apt-get update
-sudo apt-get install asterisk
-
-# CentOS/RHEL
-sudo yum install asterisk
-
-# Start Asterisk
-sudo systemctl start asterisk
-sudo systemctl enable asterisk
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-#### Configure Asterisk
-
+### 3. Configure Bot
 ```bash
-# Backup existing configs
-sudo cp /etc/asterisk/pjsip.conf /etc/asterisk/pjsip.conf.backup
-sudo cp /etc/asterisk/extensions.conf /etc/asterisk/extensions.conf.backup
-sudo cp /etc/asterisk/manager.conf /etc/asterisk/manager.conf.backup
-
-# Copy new configs
-sudo cp asterisk/configs/pjsip.conf /etc/asterisk/
-sudo cp asterisk/configs/extensions.conf /etc/asterisk/
-sudo cp asterisk/configs/manager.conf /etc/asterisk/
-
-# Edit pjsip.conf with YOUR MagnusBilling credentials
-sudo nano /etc/asterisk/pjsip.conf
-# Replace:
-#   YOUR_USERNAME with your MagnusBilling username
-#   YOUR_PASSWORD with your MagnusBilling password
-
-# Create custom sounds directory
-sudo mkdir -p /var/lib/asterisk/sounds/custom
-
-# Copy IVR audio (you need to create this)
-# Example: Use text-to-speech to generate "Press 1 if you're interested"
-# sudo cp your_audio.wav /var/lib/asterisk/sounds/custom/press_one_ivr.wav
-
-# Reload Asterisk
-sudo asterisk -rx "core reload"
-
-# Check trunk registration
-sudo asterisk -rx "pjsip show registrations"
-# Should show: magnus_trunk ... Registered
-
-# Check AMI
-sudo asterisk -rx "manager show users"
-# Should show: ivr_bot
+cp config.example.py config.py
+nano config.py
 ```
 
-### Step 4: Configure Bot
-
-Edit `bot/config.py`:
-
+**Required Settings:**
 ```python
-# Update database credentials
-DATABASE_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "database": "ivr_bot",
-    "user": "postgres",
-    "password": "YOUR_DB_PASSWORD",  # ⚠️ UPDATE THIS
-}
+# Telegram
+TELEGRAM_BOT_TOKEN = "your_bot_token_here"
 
-# Update webhook URL (for production)
-OXAPAY_WEBHOOK_URL = "https://your-domain.com/webhook/oxapay"  # ⚠️ UPDATE THIS
+# Vicidial Database
+VICIDIAL_DB_HOST = "localhost"
+VICIDIAL_DB_NAME = "asterisk"
+VICIDIAL_DB_USER = "cron"
+VICIDIAL_DB_PASS = "your_password"
 
-# Update admin Telegram IDs
-ADMIN_TELEGRAM_IDS = [123456789]  # ⚠️ UPDATE WITH YOUR TELEGRAM ID
+# Asterisk AMI
+AMI_HOST = "127.0.0.1"
+AMI_PORT = 5038
+AMI_USER = "cron"
+AMI_PASS = "your_ami_password"
 ```
 
-### Step 5: Create IVR Audio
-
-You need an audio file for the IVR message. Options:
-
-**Option 1: Text-to-Speech (Free)**
+### 4. Run Bot
 ```bash
-# Using Google TTS (Python)
-pip install gTTS
-python -c "from gtts import gTTS; tts = gTTS('Press 1 if you are interested', lang='en'); tts.save('press_one_ivr.mp3')"
+# Test mode
+python bot/main.py
 
-# Convert to WAV (requires ffmpeg)
-ffmpeg -i press_one_ivr.mp3 -ar 8000 -ac 1 press_one_ivr.wav
-
-# Copy to Asterisk
-sudo cp press_one_ivr.wav /var/lib/asterisk/sounds/custom/
+# Production (with systemd)
+sudo systemctl enable tgbot
+sudo systemctl start tgbot
 ```
 
-**Option 2: Record Your Own**
-- Record a 5-10 second message
-- Convert to: 8kHz, mono, WAV format
-- Copy to `/var/lib/asterisk/sounds/custom/press_one_ivr.wav`
+---
 
-## 🎮 Running the System
+## 🔧 Installation (Detailed)
 
-### Terminal 1: Webhook Server
+### Step 1: Prepare Vicidial Server
 ```bash
-cd dialer
-python webhook_server.py
-# Should show: Webhook server started on http://0.0.0.0:8000
+# Install Python 3.11
+sudo dnf install python3.11 python3.11-pip -y
+
+# Create bot user (optional)
+sudo useradd -m -s /bin/bash tgbot
 ```
 
-### Terminal 2: Campaign Worker
+### Step 2: Clone & Setup
 ```bash
-cd dialer
-python campaign_worker.py
-# Should show: 
-#   ✅ Database connected
-#   ✅ Connected to Asterisk AMI
-#   ✅ Campaign Worker started successfully
+cd /opt
+git clone https://github.com/yourusername/tgbot.git
+cd tgbot
+
+# Virtual environment
+python3.11 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-### Terminal 3: Telegram Bot
+### Step 3: Database Permissions
+```sql
+-- Grant bot database access
+GRANT SELECT, INSERT, UPDATE ON asterisk.vicidial_campaigns TO 'tgbot'@'localhost' IDENTIFIED BY 'botpass123';
+GRANT SELECT, INSERT ON asterisk.vicidial_lists TO 'tgbot'@'localhost';
+GRANT SELECT ON asterisk.vicidial_log TO 'tgbot'@'localhost';
+GRANT SELECT ON asterisk.vicidial_campaign_stats TO 'tgbot'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+### Step 4: AMI Configuration
 ```bash
-cd bot
-python main.py
-# Should show:
-#   ✅ Database connected
-#   ✅ Bot initialized
-#   🚀 Starting Press-1 IVR Bot...
+# Edit /etc/asterisk/manager.conf
+sudo nano /etc/asterisk/manager.conf
 ```
 
-## 📱 Using the Bot
+Add:
+```ini
+[tgbot]
+secret = tgbot123
+deny=0.0.0.0/0.0.0.0
+permit=127.0.0.1/255.255.255.255
+read = system,call,log,verbose,command,agent,user,reporting
+write = system,call,command,agent,user
+```
 
-### 1. Start Bot
-- Open Telegram
-- Search for your bot (use token to find @username)
-- Send `/start`
-
-### 2. Buy Credits
-- Use `/buy` command
-- Select a package
-- Pay with cryptocurrency via Oxapay
-- Credits added automatically
-
-### 3. Create Campaign
-- Use `/new_campaign`
-- Enter campaign name
-- Upload CSV file with phone numbers:
-  ```csv
-  1234567890
-  9876543210
-  ```
-- Click "Start Campaign"
-
-### 4. Monitor Progress
-- Use `/campaigns` to see all campaigns
-- View real-time statistics
-- Check `/balance` for remaining credits
-
-## 🧪 Testing
-
-### Test Trunk Registration
 ```bash
-sudo asterisk -rx "pjsip show registrations"
-# Should show: magnus_trunk    sip.1337global.sbs    Registered
+# Reload AMI
+sudo asterisk -rx "manager reload"
 ```
 
-### Test Manual Call
+### Step 5: Configure Bot
 ```bash
-sudo asterisk -rx "channel originate PJSIP/1234567890@magnus_trunk application Playback hello-world"
-# Should initiate a test call
+cp config.example.py config.py
+nano config.py
 ```
 
-### Test AMI Connection
+### Step 6: Test Connection
 ```bash
-telnet localhost 5038
-# Enter:
-Action: Login
-Username: ivr_bot
-Secret: IVRBot@Secure2026!
+# Test database
+python -c "from bot.vicidial_connector import test_connection; test_connection()"
 
-# Should respond: Response: Success
+# Test AMI
+python -c "from bot.ami_connector import test_ami; test_ami()"
 ```
 
-### Test Database
+### Step 7: Run Bot
 ```bash
-psql -U postgres -d ivr_bot
-SELECT * FROM users;
-SELECT * FROM campaigns;
-\q
+python bot/main.py
 ```
 
-## 🔧 Troubleshooting
+---
 
-### Asterisk trunk not registering
+## 🔄 Systemd Service (Auto-start)
+
+Create service file:
 ```bash
-# Check Asterisk logs
-sudo asterisk -rx "pjsip show registrations"
-sudo tail -f /var/log/asterisk/full
-
-# Common issues:
-# 1. Wrong credentials in pjsip.conf
-# 2. Firewall blocking port 5060
-# 3. MagnusBilling account not active
+sudo nano /etc/systemd/system/tgbot.service
 ```
 
-### Calls not originating
-```bash
-# Check AMI connection
-sudo asterisk -rx "manager show connected"
-
-# Check active channels
-sudo asterisk -rx "core show channels"
-
-# Check if budget/credits: Check MagnusBilling dashboard
-```
-
-### Webhook not receiving DTMF
-```bash
-# Test webhook manually
-curl -X POST http://localhost:8000/dtmf_webhook \
-  -H "Content-Type: application/json" \
-  -d '{"call_id":"test123","destination":"1234567890","dtmf_pressed":1}'
-
-# Check webhook server logs
-# Should show: 📨 Webhook received: ...
-```
-
-### Database connection errors
-```bash
-# Check PostgreSQL is running
-sudo systemctl status postgresql
-
-# Test connection
-psql -U postgres -d ivr_bot -c "SELECT 1"
-
-# Check credentials in config.py
-```
-
-## 💳 Oxapay Webhook Setup
-
-For production, you need a **public HTTPS URL** for Oxapay webhooks.
-
-### Option 1: ngrok (Testing)
-```bash
-ngrok http 8000
-# Copy the HTTPS URL (e.g., https://abc123.ngrok.io)
-# Update config.py: OXAPAY_WEBHOOK_URL = "https://abc123.ngrok.io/webhook/oxapay"
-```
-
-### Option 2: Production Server
-- Deploy to VPS with domain
-- Setup HTTPS (Let's Encrypt)
-- Update `OXAPAY_WEBHOOK_URL` in config.py
-- Configure firewall to allow port 8000
-
-## 📊 System Architecture Details
-
-### Call Flow
-1. **User starts campaign** via Telegram
-2. **Campaign worker** fetches pending numbers
-3. **AMI client** sends Originate action to Asterisk
-4. **Asterisk** dials via `PJSIP/{number}@magnus_trunk`
-5. **MagnusBilling** routes call to PSTN
-6. **IVR plays** audio message
-7. **User presses '1'** → DTMF detected
-8. **Asterisk sends webhook** to Python
-9. **Webhook server** updates database
-10. **Credits deducted** from user account
-
-### Billing Logic
-- **6-second minimum** billing
-- **6-second increments** (standard telecom)
-- **1 credit = 1 minute** (default)
-- Costs calculated on answered calls only
-
-## 🛡️ Security Notes
-
-- ⚠️ **Change default passwords** in `manager.conf`
-- ⚠️ **Use HTTPS** for production webhooks
-- ⚠️ **Firewall** AMI port 5038 (only localhost)
-- ⚠️ **Secure database** with strong password
-- ⚠️ **Keep API keys** in environment variables for production
-
-## 📝 File Structure
-
-```
-tgbot/
-├── asterisk/
-│   ├── configs/
-│   │   ├── pjsip.conf          # MagnusBilling trunk
-│   │   ├── extensions.conf     # IVR dialplan
-│   │   └── manager.conf        # AMI config
-│   └── sounds/
-│       └── press_one_ivr.wav   # IVR audio
-├── bot/
-│   ├── main.py                 # Telegram bot
-│   ├── database.py             # Database ORM
-│   ├── oxapay_handler.py       # Payment integration
-│   ├── config.py               # Configuration
-│   └── requirements.txt
-├── dialer/
-│   ├── ami_client.py           # AMI connection
-│   ├── campaign_worker.py      # Call processor
-│   ├── webhook_server.py       # DTMF handler
-│   └── requirements.txt
-├── database/
-│   └── schema.sql              # PostgreSQL schema
-└── README.md
-```
-
-## 🚀 Production Deployment
-
-### Using Systemd (Linux)
-
-Create service files:
-
-**`/etc/systemd/system/ivr-webhook.service`:**
 ```ini
 [Unit]
-Description=IVR Bot Webhook Server
-After=network.target postgresql.service asterisk.service
+Description=Telegram Vicidial Bot
+After=network.target mysql.service asterisk.service
 
 [Service]
 Type=simple
-User=ivrbot
-WorkingDirectory=/path/to/tgbot/dialer
-ExecStart=/path/to/tgbot/venv/bin/python webhook_server.py
+User=tgbot
+WorkingDirectory=/opt/tgbot
+Environment="PATH=/opt/tgbot/venv/bin"
+ExecStart=/opt/tgbot/venv/bin/python bot/main.py
 Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**`/etc/systemd/system/ivr-worker.service`:**
-```ini
-[Unit]
-Description=IVR Bot Campaign Worker
-After=network.target postgresql.service asterisk.service ivr-webhook.service
-
-[Service]
-Type=simple
-User=ivrbot
-WorkingDirectory=/path/to/tgbot/dialer
-ExecStart=/path/to/tgbot/venv/bin/python campaign_worker.py
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**`/etc/systemd/system/ivr-bot.service`:**
-```ini
-[Unit]
-Description=IVR Telegram Bot
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-User=ivrbot
-WorkingDirectory=/path/to/tgbot/bot
-ExecStart=/path/to/tgbot/venv/bin/python main.py
-Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -443,20 +242,192 @@ WantedBy=multi-user.target
 Enable and start:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable ivr-webhook ivr-worker ivr-bot
-sudo systemctl start ivr-webhook ivr-worker ivr-bot
-sudo systemctl status ivr-webhook ivr-worker ivr-bot
+sudo systemctl enable tgbot
+sudo systemctl start tgbot
+sudo systemctl status tgbot
 ```
-
-## 📄 License
-
-This is a commercial SaaS solution. All rights reserved.
-
-## 🤝 Support
-
-For issues or questions, contact your system administrator.
 
 ---
 
-**Built with**: Python, Asterisk, PostgreSQL, Telegram Bot API
-**Powered by**: MagnusBilling, Oxapay
+## � Usage
+
+### Starting the Bot
+1. Open Telegram
+2. Search for your bot: `@YourBotName`
+3. Send `/start`
+
+### Creating a Campaign
+1. Click **🚀 Launch Campaign**
+2. Enter campaign name
+3. Upload IVR voice message
+4. Upload CSV with phone numbers
+5. Configure AMD settings (optional)
+6. Launch!
+
+### Managing Campaigns
+- **📊 Live Statistics** - View real-time stats
+- **⏸️ Pause/Resume** - Control campaigns
+- **📋 Call Logs** - Detailed call results
+- **🔧 Configure CID** - Set caller ID
+
+---
+
+## 🎯 Vicidial Integration
+
+### Campaign Creation
+Bot creates campaigns in Vicidial with prefix `TG_`:
+```sql
+INSERT INTO vicidial_campaigns (
+    campaign_id, campaign_name, active,
+    dial_method, amd_send_to_vmx
+) VALUES (
+    'TG_001', 'Product Launch', 'Y',
+    'RATIO', 'Y'
+);
+```
+
+### AMD Configuration
+Campaigns automatically use Vicidial's AMD:
+- **Detect Answering Machines**
+- **Leave Messages on VM**
+- **Skip to Next Call**
+- **Configurable via Telegram**
+
+### Call Logs
+Real-time call results from `vicidial_log`:
+- ✅ Pressed 1 (Success)
+- 📞 Answered (No press)
+- 🤖 Voicemail Detected
+- ⭕ No Answer
+- ❌ Failed/Busy
+
+---
+
+## � Security
+
+### Best Practices
+1. **Separate DB User** - Create dedicated bot user
+2. **Read-Only Start** - Test with SELECT permissions first
+3. **AMI Restrictions** - Limit to localhost
+4. **Campaign Prefix** - Only touch `TG_` campaigns
+5. **Backup First** - Always backup before changes
+
+### Firewall
+```bash
+# Bot doesn't need external ports
+# Only Telegram API (HTTPS outbound)
+```
+
+---
+
+## 🐛 Troubleshooting
+
+### Bot Won't Start
+```bash
+# Check logs
+journalctl -u tgbot -f
+
+# Verify Python
+python3.11 --version
+
+# Test dependencies
+pip list | grep telegram
+```
+
+### Database Connection Failed
+```bash
+# Test MySQL access
+mysql -u tgbot -p asterisk
+
+# Check grants
+SHOW GRANTS FOR 'tgbot'@'localhost';
+```
+
+### AMI Connection Failed
+```bash
+# Check AMI status
+sudo asterisk -rx "manager show connected"
+
+# Verify credentials in manager.conf
+sudo cat /etc/asterisk/manager.conf | grep tgbot -A 5
+```
+
+### Campaign Not Starting
+```bash
+# Check Asterisk
+sudo asterisk -rx "core show channels"
+
+# Verify campaign in DB
+mysql -u root -p asterisk -e "SELECT * FROM vicidial_campaigns WHERE campaign_id LIKE 'TG_%'"
+```
+
+---
+
+## � Project Structure
+
+```
+tgbot/
+├── bot/
+│   ├── main.py                    # Main bot application
+│   ├── config.py                  # Configuration
+│   ├── vicidial_connector.py      # Vicidial DB integration
+│   ├── ami_connector.py           # Asterisk AMI
+│   ├── campaign_manager.py        # Campaign CRUD
+│   ├── ui_components.py           # Telegram UI helpers
+│   └── database_mock.py           # Mock DB for testing
+├── requirements.txt               # Python dependencies
+├── README.md                      # This file
+└── systemd/
+    └── tgbot.service              # Systemd service file
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions welcome! Please:
+1. Fork the repository
+2. Create feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit changes (`git commit -m 'Add AmazingFeature'`)
+4. Push to branch (`git push origin feature/AmazingFeature`)
+5. Open Pull Request
+
+---
+
+## 📝 License
+
+This project is licensed under the MIT License - see LICENSE file for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- **Vicidial** - Powerful open-source contact center suite
+- **python-telegram-bot** - Excellent Telegram API wrapper
+- **Asterisk** - The world's leading open-source PBX
+
+---
+
+## 💬 Support
+
+- **Issues:** [GitHub Issues](https://github.com/yourusername/tgbot/issues)
+- **Telegram:** @YourSupportChannel
+- **Email:** support@yourdomain.com
+
+---
+
+## 🗺️ Roadmap
+
+- [x] Basic Vicidial integration
+- [x] Campaign management
+- [x] AMD support
+- [x] Caller ID management
+- [ ] Advanced reporting
+- [ ] Multi-tenant support
+- [ ] Web dashboard
+- [ ] API endpoints
+- [ ] Mobile app
+
+---
+
+**Built with ❤️ for Vicidial Community**
