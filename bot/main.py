@@ -1859,6 +1859,20 @@ async def handle_admin_price_callback(update: Update, context: ContextTypes.DEFA
             parse_mode='HTML'
         )
 
+# =============================================================================
+# Bot Lifecycle Hooks
+# =============================================================================
+
+async def post_init(application):
+    """Called after bot initialization - connect to database"""
+    await db.connect()
+    logger.info("✅ Database connected")
+
+async def post_shutdown(application):
+    """Called on bot shutdown - cleanup resources"""
+    await db.close()
+    logger.info("🔴 Database connection closed")
+
 
 def main():
     """Main function to run the bot"""

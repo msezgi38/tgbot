@@ -14,7 +14,7 @@ TELEGRAM_BOT_TOKEN = "8419284355:AAFNUKJWVLXqtVIzwjbTW0Jq6dmyHkdxsqE"
 # =============================================================================
 OXAPAY_API_KEY = "QSTFGZ-C3IXYJ-XCEWN6-GZZHAS"
 OXAPAY_API_URL = "https://api.oxapay.com/merchants/createInvoice"
-OXAPAY_WEBHOOK_URL = "https://your-domain.com/webhook/oxapay"  # ⚠️ UPDATE THIS
+OXAPAY_WEBHOOK_URL = "https://195.85.114.55/webhook/oxapay"  # ⚠️ UPDATE THIS
 
 # Payment Configuration
 CREDIT_PACKAGES = {
@@ -31,8 +31,8 @@ DATABASE_CONFIG = {
     "host": "localhost",
     "port": 5432,
     "database": "ivr_bot",
-    "user": "postgres",                 # ⚠️ UPDATE WITH YOUR DB USER
-    "password": "your_db_password",     # ⚠️ UPDATE WITH YOUR DB PASSWORD
+    "user": "ivrbot",                 # ⚠️ UPDATE WITH YOUR DB USER
+    "password": "ivr2026secure",     # ⚠️ UPDATE WITH YOUR DB PASSWORD
 }
 
 DATABASE_URL = f"postgresql://{DATABASE_CONFIG['user']}:{DATABASE_CONFIG['password']}@{DATABASE_CONFIG['host']}:{DATABASE_CONFIG['port']}/{DATABASE_CONFIG['database']}"
@@ -44,7 +44,7 @@ AMI_CONFIG = {
     "host": "127.0.0.1",
     "port": 5038,
     "username": "ivr_bot",
-    "secret": "IVRBot@Secure2026!",      # ⚠️ Must match manager.conf
+    "secret": "IVRBotSecure2026",      # ⚠️ Must match manager.conf
 }
 
 # =============================================================================
