@@ -7,6 +7,9 @@
 import logging
 import csv
 import io
+import asyncio
+import subprocess
+from datetime import datetime
 from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -18,7 +21,7 @@ from telegram.ext import (
     filters
 )
 
-from config import TELEGRAM_BOT_TOKEN, CREDIT_PACKAGES, ADMIN_TELEGRAM_IDS, TEST_MODE, SUPPORTED_COUNTRY_CODES
+from config import TELEGRAM_BOT_TOKEN, CREDIT_PACKAGES, ADMIN_TELEGRAM_IDS, TEST_MODE, SUPPORTED_COUNTRY_CODES, ASTERISK_RELOAD_CMD
 # Using mock database for UI testing (no PostgreSQL required)
 from database_mock import db
 from oxapay_handler import oxapay
@@ -72,10 +75,11 @@ Ready to launch your campaign?
         ],
         [
             InlineKeyboardButton("🛠️ Tools & Utilities", callback_data="menu_tools"),
-            InlineKeyboardButton("🔑 Account Info", callback_data="menu_account")
+            InlineKeyboardButton("🎵 My Voices", callback_data="menu_voices")
         ],
         [
-            InlineKeyboardButton("💬 Contact Support", callback_data="menu_support")
+            InlineKeyboardButton("🔑 Account Info", callback_data="menu_account"),
+            InlineKeyboardButton("💬 Support", callback_data="menu_support")
         ]
     ]
     
@@ -417,13 +421,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop('trunk_host', None)
             context.user_data.pop('trunk_username', None)
             
+            # Auto-reload PJSIP
+            reload_status = ''
+            try:
+                result = subprocess.run(
+                    ASTERISK_RELOAD_CMD, shell=True,
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    reload_status = '\n\n✅ PJSIP reloaded - trunk is active!'
+                else:
+                    reload_status = '\n\n⚠️ PJSIP reload failed - restart manually'
+            except Exception:
+                reload_status = '\n\n⚠️ Could not auto-reload Asterisk'
+            
             await update.message.reply_text(
                 f"✅ <b>Trunk Created!</b>\n\n"
                 f"📛 Name: {trunk['name']}\n"
                 f"🌐 Host: {trunk['sip_host']}\n"
                 f"👤 User: {trunk['sip_username']}\n"
-                f"🔗 Endpoint: <code>{trunk['pjsip_endpoint_name']}</code>\n\n"
-                f"⚠️ Trunk will be active after Asterisk reload.",
+                f"🔗 Endpoint: <code>{trunk['pjsip_endpoint_name']}</code>"
+                f"{reload_status}",
                 parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
@@ -493,55 +511,79 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =============================================================================
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle voice/audio file upload"""
-    if not context.user_data.get('creating_campaign'):
-        await update.message.reply_text("Use /new_campaign first")
-        return
-    
-    if context.user_data.get('campaign_step') != 'voice_upload':
-        return
-    
+    """Handle voice/audio file upload - saves to audio store"""
     user = update.effective_user
     
     if update.message.voice:
         file = update.message.voice
         duration = file.duration or 30
+        ext = 'ogg'
     elif update.message.audio:
         file = update.message.audio
         duration = file.duration or 30
+        ext = 'mp3'
     else:
         return
     
     user_data = await db.get_or_create_user(user.id)
-    voice_name = f"{context.user_data.get('campaign_name', 'Voice')} - IVR"
+    
+    # Download and save to disk
+    import os
+    tg_file = await file.get_file()
+    file_content = await tg_file.download_as_bytearray()
+    
+    voice_name = f"voice_{user_data['id']}_{int(datetime.now().timestamp())}"
+    voice_dir = f"/opt/tgbot/voices/{user_data['id']}"
+    os.makedirs(voice_dir, exist_ok=True)
+    file_path = f"{voice_dir}/{voice_name}.{ext}"
+    
+    with open(file_path, 'wb') as f:
+        f.write(file_content)
+    
     voice_id = await db.save_voice_file(user_data['id'], voice_name, duration)
     
-    context.user_data['voice_id'] = voice_id
-    context.user_data['campaign_step'] = 'select_trunk'
+    # If in campaign creation, auto-select and advance
+    in_campaign = (context.user_data.get('creating_campaign') and 
+                   context.user_data.get('campaign_step') == 'voice_upload')
     
-    # Show trunk selection
-    trunks = await db.get_user_trunks(user_data['id'])
-    
-    keyboard = []
-    if trunks:
-        for trunk in trunks:
-            status = "🟢" if trunk['status'] == 'active' else "🔴"
-            keyboard.append([InlineKeyboardButton(
-                f"{status} {trunk['name']} ({trunk['sip_host']})",
-                callback_data=f"camp_trunk_{trunk['id']}"
-            )])
+    if in_campaign:
+        context.user_data['voice_id'] = voice_id
+        context.user_data['campaign_step'] = 'select_trunk'
+        
+        trunks = await db.get_user_trunks(user_data['id'])
+        keyboard = []
+        if trunks:
+            for trunk in trunks:
+                status = "🟢" if trunk['status'] == 'active' else "🔴"
+                keyboard.append([InlineKeyboardButton(
+                    f"{status} {trunk['name']} ({trunk['sip_host']})",
+                    callback_data=f"camp_trunk_{trunk['id']}"
+                )])
+        else:
+            keyboard.append([InlineKeyboardButton("➕ Add SIP Trunk First", callback_data="trunk_add")])
+        keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="menu_main")])
+        
+        await update.message.reply_text(
+            f"✅ Voice Saved: {voice_name} ({duration}s)\n\n"
+            f"Step 3: Select SIP Trunk\n\n"
+            f"Choose which trunk to use for this campaign:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     else:
-        keyboard.append([InlineKeyboardButton("➕ Add SIP Trunk First", callback_data="trunk_add")])
-    
-    keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="menu_main")])
-    
-    await update.message.reply_text(
-        f"✅ Voice Saved: {voice_name} ({duration}s)\n\n"
-        f"Step 3: Select SIP Trunk\n\n"
-        f"Choose which trunk to use for this campaign:",
-        parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+        # Standalone upload to audio store
+        await update.message.reply_text(
+            f"✅ <b>Audio Saved!</b>\n\n"
+            f"🎵 Name: {voice_name}\n"
+            f"⏱ Duration: {duration}s\n"
+            f"📂 Path: <code>{file_path}</code>\n\n"
+            f"You can select this voice when creating a campaign.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎵 My Voices", callback_data="menu_voices")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
+        )
 
 
 # =============================================================================
@@ -553,8 +595,66 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
     filename = update.message.document.file_name.lower()
+    
+    # Handle WAV/MP3 audio files for voice store
+    if filename.endswith('.wav') or filename.endswith('.mp3') or filename.endswith('.ogg'):
+        file = await update.message.document.get_file()
+        file_content = await file.download_as_bytearray()
+        
+        user_data = await db.get_or_create_user(user.id)
+        voice_name = filename.rsplit('.', 1)[0]  # Use filename without extension
+        
+        # Save to server path
+        import os
+        voice_dir = f"/opt/tgbot/voices/{user_data['id']}"
+        os.makedirs(voice_dir, exist_ok=True)
+        file_path = f"{voice_dir}/{filename}"
+        
+        with open(file_path, 'wb') as f:
+            f.write(file_content)
+        
+        voice_id = await db.save_voice_file(user_data['id'], voice_name, 0)
+        
+        # If in campaign creation voice step, auto-select it
+        if context.user_data.get('creating_campaign') and context.user_data.get('campaign_step') == 'voice_upload':
+            context.user_data['voice_id'] = voice_id
+            context.user_data['campaign_step'] = 'select_trunk'
+            
+            trunks = await db.get_user_trunks(user_data['id'])
+            keyboard = []
+            if trunks:
+                for trunk in trunks:
+                    status = "🟢" if trunk['status'] == 'active' else "🔴"
+                    keyboard.append([InlineKeyboardButton(
+                        f"{status} {trunk['name']} ({trunk['sip_host']})",
+                        callback_data=f"camp_trunk_{trunk['id']}"
+                    )])
+            else:
+                keyboard.append([InlineKeyboardButton("➕ Add SIP Trunk First", callback_data="trunk_add")])
+            keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="menu_main")])
+            
+            await update.message.reply_text(
+                f"✅ Voice Saved: <b>{voice_name}</b>\n\n"
+                f"Step 3: Select SIP Trunk:",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await update.message.reply_text(
+                f"✅ <b>Audio Saved!</b>\n\n"
+                f"🎵 Name: {voice_name}\n"
+                f"📂 Path: <code>{file_path}</code>\n\n"
+                f"You can select this voice when creating a campaign.",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎵 My Voices", callback_data="menu_voices")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                ])
+            )
+        return
+    
     if not (filename.endswith('.csv') or filename.endswith('.txt')):
-        await update.message.reply_text("❌ Please upload a CSV or TXT file")
+        await update.message.reply_text("❌ Supported files: CSV, TXT (numbers) or WAV, MP3, OGG (audio)")
         return
     
     file = await update.message.document.get_file()
@@ -706,6 +806,28 @@ async def handle_voice_selection(update: Update, context: ContextTypes.DEFAULT_T
             "Choose which trunk to route calls through:",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    elif data.startswith("voice_delete_"):
+        voice_id = int(data.replace("voice_delete_", ""))
+        user_data = await db.get_or_create_user(user.id)
+        
+        # Delete from DB
+        try:
+            if hasattr(db, 'pool'):
+                async with db.pool.acquire() as conn:
+                    await conn.execute("DELETE FROM voice_files WHERE id = $1 AND user_id = $2", voice_id, user_data['id'])
+            elif hasattr(db, 'voice_files'):
+                db.voice_files.pop(voice_id, None)
+        except Exception:
+            pass
+        
+        await query.edit_message_text(
+            "🗑️ Voice deleted!\n\nUse 🎵 My Voices to see remaining files.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎵 My Voices", callback_data="menu_voices")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
         )
 
 
@@ -903,10 +1025,11 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
             ],
             [
                 InlineKeyboardButton("🛠️ Tools & Utilities", callback_data="menu_tools"),
-                InlineKeyboardButton("🔑 Account Info", callback_data="menu_account")
+                InlineKeyboardButton("🎵 My Voices", callback_data="menu_voices")
             ],
             [
-                InlineKeyboardButton("💬 Contact Support", callback_data="menu_support")
+                InlineKeyboardButton("🔑 Account Info", callback_data="menu_account"),
+                InlineKeyboardButton("💬 Support", callback_data="menu_support")
             ]
         ]
         
@@ -1033,6 +1156,38 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
                 [InlineKeyboardButton("🔄 Refresh", callback_data="menu_admin_stats")],
                 [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")]
             ])
+        )
+    
+    elif action == "voices":
+        user_data_full = await db.get_or_create_user(user.id)
+        voices = await db.get_user_voice_files(user_data_full['id'])
+        
+        text = "🎵 <b>My Voice Files</b>\n\n"
+        keyboard = []
+        
+        if voices:
+            for v in voices:
+                dur = v.get('duration', 0)
+                name = v.get('name', 'Unnamed')
+                text += f"🎶 <b>{name}</b> ({dur}s)\n"
+                keyboard.append([
+                    InlineKeyboardButton(f"🗑️ Delete {name}", callback_data=f"voice_delete_{v['id']}")
+                ])
+        else:
+            text += "📭 No voice files yet.\n"
+        
+        text += (
+            "\n<b>How to upload:</b>\n"
+            "🎤 Send a voice message\n"
+            "📂 Upload a WAV, MP3, or OGG file\n\n"
+            "Files will be saved to your audio store."
+        )
+        
+        keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")])
+        
+        await query.edit_message_text(
+            text, parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     elif action == "launch":

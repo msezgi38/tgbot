@@ -102,31 +102,8 @@ class MockDatabase:
         return list(self.users.values())
     
     async def _create_sample_trunks(self, user_id: int):
-        """Create sample trunks for demo"""
-        sample_trunks = [
-            {'name': 'MagnusBilling #1', 'sip_host': 'sip.1337global.sbs', 'sip_username': 'user1', 'sip_password': '***', 'status': 'active'},
-            {'name': 'VoIP.ms Trunk', 'sip_host': 'atlanta.voip.ms', 'sip_username': 'user2', 'sip_password': '***', 'status': 'active'},
-        ]
-        for t in sample_trunks:
-            trunk_id = self.next_trunk_id
-            self.next_trunk_id += 1
-            self.trunks[trunk_id] = {
-                'id': trunk_id,
-                'user_id': user_id,
-                'name': t['name'],
-                'sip_host': t['sip_host'],
-                'sip_port': 5060,
-                'sip_username': t['sip_username'],
-                'sip_password': t['sip_password'],
-                'transport': 'udp',
-                'codecs': 'ulaw,alaw,gsm',
-                'caller_id': None,
-                'max_channels': 10,
-                'status': t['status'],
-                'pjsip_endpoint_name': f'user_{user_id}_trunk_{trunk_id}',
-                'created_at': datetime.now() - timedelta(days=10),
-                'updated_at': datetime.now() - timedelta(days=10),
-            }
+        """No sample trunks - users add their own"""
+        pass
     
     async def _create_sample_leads(self, user_id: int):
         """Create sample lead lists for demo"""
