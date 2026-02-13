@@ -103,6 +103,7 @@ class CampaignWorker:
                     c.id, c.user_id, c.name, c.caller_id, 
                     c.total_numbers, c.completed,
                     c.trunk_id, c.lead_id, c.country_code, c.cps,
+                    c.voice_file,
                     ut.pjsip_endpoint_name as trunk_endpoint,
                     ut.caller_id as trunk_caller_id,
                     ut.max_channels as trunk_max_channels,
@@ -205,13 +206,15 @@ class CampaignWorker:
                 await self.update_number_status(campaign_data_id, 'dialing')
                 
                 # Originate call via user's specific trunk
+                voice_file = campaign.get('voice_file', '') or ''
                 call_id = await self.ami_client.originate_call(
                     destination=phone_number,
                     trunk_endpoint=trunk_endpoint,
                     caller_id=caller_id,
                     variables={
                         'CAMPAIGN_ID': str(campaign_id),
-                        'CAMPAIGN_DATA_ID': str(campaign_data_id)
+                        'CAMPAIGN_DATA_ID': str(campaign_data_id),
+                        'VOICE_FILE': voice_file
                     }
                 )
                 

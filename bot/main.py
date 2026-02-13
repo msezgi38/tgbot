@@ -548,7 +548,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(file_path, 'wb') as f:
         f.write(file_content)
     
-    voice_id = await db.save_voice_file(user_data['id'], voice_name, duration)
+    voice_id = await db.save_voice_file(user_data['id'], voice_name, duration, file_path)
     
     # If in campaign creation, auto-select and advance
     in_campaign = (context.user_data.get('creating_campaign') and 
@@ -621,7 +621,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(file_path, 'wb') as f:
             f.write(file_content)
         
-        voice_id = await db.save_voice_file(user_data['id'], voice_name, 0)
+        voice_id = await db.save_voice_file(user_data['id'], voice_name, 0, file_path)
         
         # If in campaign creation voice step, auto-select it
         if context.user_data.get('creating_campaign') and context.user_data.get('campaign_step') == 'voice_upload':
@@ -950,9 +950,17 @@ async def handle_campaign_setup(update: Update, context: ContextTypes.DEFAULT_TY
         lead_id = context.user_data.get('campaign_lead_id')
         campaign_name = context.user_data.get('campaign_name', 'Unnamed Campaign')
         country_code = context.user_data.get('campaign_country_code', '')
+        voice_id = context.user_data.get('voice_id')
         
         lead = await db.get_lead(lead_id)
         trunk = await db.get_trunk(trunk_id) if trunk_id else None
+        
+        # Get voice file path
+        voice_file_path = None
+        if voice_id:
+            voice = await db.get_voice_file(voice_id)
+            if voice and voice.get('file_path'):
+                voice_file_path = voice['file_path']
         
         campaign_id = await db.create_campaign(
             user_id=user_data['id'],
@@ -961,7 +969,8 @@ async def handle_campaign_setup(update: Update, context: ContextTypes.DEFAULT_TY
             lead_id=lead_id,
             caller_id=user_data.get('caller_id'),
             country_code=country_code,
-            cps=cps
+            cps=cps,
+            voice_file=voice_file_path
         )
         
         # Store campaign settings

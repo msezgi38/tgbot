@@ -143,6 +143,7 @@ CREATE TABLE campaigns (
     pressed_one INTEGER DEFAULT 0,                    -- Successful press-1
     failed INTEGER DEFAULT 0,                         -- Failed calls
     status VARCHAR(50) DEFAULT 'draft',               -- draft, running, paused, completed
+    voice_file VARCHAR(500),                            -- Path to voice/audio file for IVR
     estimated_cost DECIMAL(10, 2),                    -- Estimated credit cost
     actual_cost DECIMAL(10, 2) DEFAULT 0.00,          -- Actual cost so far
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

@@ -423,15 +423,16 @@ class Database:
         lead_id: Optional[int] = None,
         caller_id: Optional[str] = None,
         country_code: str = '',
-        cps: int = 5
+        cps: int = 5,
+        voice_file: Optional[str] = None
     ) -> int:
         """Create new campaign linked to user's trunk and lead list"""
         async with self.pool.acquire() as conn:
             campaign_id = await conn.fetchval("""
-                INSERT INTO campaigns (user_id, name, trunk_id, lead_id, caller_id, country_code, cps, status)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')
+                INSERT INTO campaigns (user_id, name, trunk_id, lead_id, caller_id, country_code, cps, voice_file, status)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft')
                 RETURNING id
-            """, user_id, name, trunk_id, lead_id, caller_id, country_code, cps)
+            """, user_id, name, trunk_id, lead_id, caller_id, country_code, cps, voice_file)
             return campaign_id
     
     async def add_campaign_numbers(
@@ -576,14 +577,14 @@ class Database:
     # Voice Files (Per-User)
     # =========================================================================
     
-    async def save_voice_file(self, user_id: int, name: str, duration: int = 0) -> int:
+    async def save_voice_file(self, user_id: int, name: str, duration: int = 0, file_path: str = None) -> int:
         """Save a voice file record"""
         async with self.pool.acquire() as conn:
             voice_id = await conn.fetchval("""
-                INSERT INTO voice_files (user_id, name, duration)
-                VALUES ($1, $2, $3)
+                INSERT INTO voice_files (user_id, name, duration, file_path)
+                VALUES ($1, $2, $3, $4)
                 RETURNING id
-            """, user_id, name, duration)
+            """, user_id, name, duration, file_path)
             return voice_id
     
     async def get_user_voice_files(self, user_id: int) -> List[Dict]:
