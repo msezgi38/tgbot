@@ -22,8 +22,8 @@ from telegram.ext import (
 )
 
 from config import TELEGRAM_BOT_TOKEN, CREDIT_PACKAGES, ADMIN_TELEGRAM_IDS, TEST_MODE, SUPPORTED_COUNTRY_CODES, ASTERISK_RELOAD_CMD
-# Using mock database for UI testing (no PostgreSQL required)
-from database_mock import db
+# Real PostgreSQL database - data persists across restarts
+from database import db
 from oxapay_handler import oxapay
 from ui_components import ui
 
