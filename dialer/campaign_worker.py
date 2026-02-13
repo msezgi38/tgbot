@@ -206,7 +206,11 @@ class CampaignWorker:
                 await self.update_number_status(campaign_data_id, 'dialing')
                 
                 # Originate call via user's specific trunk
+                # Asterisk Playback() expects path WITHOUT extension
                 voice_file = campaign.get('voice_file', '') or ''
+                if voice_file:
+                    import os
+                    voice_file = os.path.splitext(voice_file)[0]
                 call_id = await self.ami_client.originate_call(
                     destination=phone_number,
                     trunk_endpoint=trunk_endpoint,
