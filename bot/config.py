@@ -14,7 +14,7 @@ TELEGRAM_BOT_TOKEN = "8419284355:AAFNUKJWVLXqtVIzwjbTW0Jq6dmyHkdxsqE"
 # =============================================================================
 OXAPAY_API_KEY = "QSTFGZ-C3IXYJ-XCEWN6-GZZHAS"
 OXAPAY_API_URL = "https://api.oxapay.com/merchants/createInvoice"
-OXAPAY_WEBHOOK_URL = "https://195.85.114.55/webhook/oxapay"  # ⚠️ UPDATE THIS
+OXAPAY_WEBHOOK_URL = "http://195.85.114.55/webhook/oxapay"  # ⚠️ UPDATE THIS
 
 # Payment Configuration
 CREDIT_PACKAGES = {
