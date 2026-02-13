@@ -33,20 +33,11 @@ class MockDatabase:
         self.next_lead_number_id = 1
         
         # Voice files
-        self.voice_files = {
-            1: {'id': 1, 'name': 'Product Intro Voice', 'duration': 45, 'uploaded_at': datetime.now() - timedelta(days=5)},
-            2: {'id': 2, 'name': 'Survey Questions', 'duration': 32, 'uploaded_at': datetime.now() - timedelta(days=2)},
-            3: {'id': 3, 'name': 'Event Invitation', 'duration': 28, 'uploaded_at': datetime.now() - timedelta(hours=12)},
-        }
-        self.next_voice_id = 4
+        self.voice_files = {}
+        self.next_voice_id = 1
         
         # Preset CIDs
-        self.preset_cids = [
-            {'id': 1, 'number': '18889092337', 'name': 'Premium CID #1', 'verified': True},
-            {'id': 2, 'number': '18552847621', 'name': 'Premium CID #2', 'verified': True},
-            {'id': 3, 'number': '18667123456', 'name': 'Premium CID #3', 'verified': True},
-            {'id': 4, 'number': '18778901234', 'name': 'Premium CID #4', 'verified': True},
-        ]
+        self.preset_cids = []
         
     async def connect(self):
         self.connected = True
@@ -106,24 +97,8 @@ class MockDatabase:
         pass
     
     async def _create_sample_leads(self, user_id: int):
-        """Create sample lead lists for demo"""
-        sample_leads = [
-            {'list_name': 'US Contacts Jan 2026', 'total': 500, 'available': 350},
-            {'list_name': 'UK Prospects', 'total': 200, 'available': 200},
-            {'list_name': 'VIP Customers', 'total': 50, 'available': 50},
-        ]
-        for sl in sample_leads:
-            lead_id = self.next_lead_id
-            self.next_lead_id += 1
-            self.leads_store[lead_id] = {
-                'id': lead_id,
-                'user_id': user_id,
-                'list_name': sl['list_name'],
-                'description': None,
-                'total_numbers': sl['total'],
-                'available_numbers': sl['available'],
-                'created_at': datetime.now() - timedelta(days=7),
-            }
+        """No sample leads - users add their own"""
+        pass
     
     async def get_user_credits(self, telegram_id: int) -> float:
         user = await self.get_or_create_user(telegram_id)
