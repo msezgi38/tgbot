@@ -107,12 +107,19 @@ class AsteriskAMIClient:
             
             response = await self.manager.send_action(action_params)
             
-            if response.success:
-                call_id = response.headers.get('UniqueID', '')
+            # panoramisk returns a list of Message objects
+            if isinstance(response, list):
+                resp = response[0] if response else None
+            else:
+                resp = response
+            
+            if resp and resp.response == 'Success':
+                call_id = resp.headers.get('Uniqueid', resp.headers.get('UniqueID', ''))
                 logger.info(f"✅ Call originated successfully - ID: {call_id}")
                 return call_id
             else:
-                logger.error(f"❌ Failed to originate call: {response.headers.get('Message', 'Unknown error')}")
+                msg = resp.headers.get('Message', 'Unknown error') if resp else 'No response'
+                logger.error(f"❌ Failed to originate call: {msg}")
                 return None
                 
         except Exception as e:
@@ -140,7 +147,11 @@ class AsteriskAMIClient:
             response = await self.manager.send_action({
                 'Action': 'CoreShowChannels'
             })
-            return int(response.headers.get('ListItems', '0'))
+            if isinstance(response, list):
+                resp = response[0] if response else None
+            else:
+                resp = response
+            return int(resp.headers.get('ListItems', '0')) if resp else 0
         except Exception as e:
             logger.error(f"Error getting active channels: {e}")
             return 0

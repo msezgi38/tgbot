@@ -192,7 +192,14 @@ async def campaigns_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trunk = camp.get('trunk_name', 'No Trunk')
         lead = camp.get('lead_name', 'Direct Upload')
         text += f"{status_emoji} <b>{camp['name']}</b>\n   📞 {camp.get('completed', 0)}/{camp.get('total_numbers', 0)} | 🔌 {trunk}\n\n"
-        keyboard.append([InlineKeyboardButton(f"📊 {camp['name'][:25]}", callback_data=f"details_{camp['id']}")])
+        
+        # Control buttons per campaign
+        row = [InlineKeyboardButton(f"📊 Details", callback_data=f"details_{camp['id']}")]
+        if camp.get('status') == 'running':
+            row.append(InlineKeyboardButton(f"🛑 Stop", callback_data=f"stop_{camp['id']}"))
+        elif camp.get('status') == 'paused':
+            row.append(InlineKeyboardButton(f"▶️ Resume", callback_data=f"resume_{camp['id']}"))
+        keyboard.append(row)
     
     keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")])
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1621,7 +1628,21 @@ async def handle_campaign_controls(update: Update, context: ContextTypes.DEFAULT
     
     data = query.data
     
-    if data.startswith("pause_"):
+    if data.startswith("stop_"):
+        campaign_id = int(data.replace("stop_", ""))
+        await db.stop_campaign(campaign_id)
+        
+        await query.edit_message_text(
+            f"🛑 <b>Campaign #{campaign_id} Stopped</b>\n\n"
+            f"All calls have been halted.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 View Campaigns", callback_data="menu_campaigns")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
+        )
+    
+    elif data.startswith("pause_"):
         campaign_id = int(data.replace("pause_", ""))
         await db.stop_campaign(campaign_id)
         
@@ -1905,7 +1926,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_menu_callbacks, pattern="^menu_"))
     application.add_handler(CallbackQueryHandler(handle_voice_selection, pattern="^voice_"))
     application.add_handler(CallbackQueryHandler(handle_cid_callbacks, pattern="^(cid_|setcid_)"))
-    application.add_handler(CallbackQueryHandler(handle_campaign_controls, pattern="^(pause|resume|details|logs)_"))
+    application.add_handler(CallbackQueryHandler(handle_campaign_controls, pattern="^(pause|resume|stop|details|logs)_"))
     
     # Message handlers
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
