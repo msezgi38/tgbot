@@ -306,7 +306,14 @@ class Database:
         """Delete a lead list and all its numbers"""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                # Delete lead numbers first (FK constraint)
+                # Nullify campaign_data references to lead_numbers (FK constraint)
+                await conn.execute("""
+                    UPDATE campaign_data SET lead_number_id = NULL
+                    WHERE lead_number_id IN (
+                        SELECT id FROM lead_numbers WHERE lead_id = $1
+                    )
+                """, lead_id)
+                # Delete lead numbers
                 await conn.execute("DELETE FROM lead_numbers WHERE lead_id = $1", lead_id)
                 # Delete the lead list
                 result = await conn.execute("DELETE FROM leads WHERE id = $1", lead_id)
