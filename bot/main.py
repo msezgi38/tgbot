@@ -1355,7 +1355,8 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
         if leads:
             for lead in leads:
                 keyboard.append([
-                    InlineKeyboardButton(f"🗑 Delete {lead['list_name'][:20]}", callback_data=f"lead_delete_{lead['id']}")
+                    InlineKeyboardButton(f"� Reset {lead['list_name'][:15]}", callback_data=f"lead_reset_{lead['id']}"),
+                    InlineKeyboardButton(f"🗑 Delete", callback_data=f"lead_delete_{lead['id']}")
                 ])
         
         keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")])
@@ -1587,6 +1588,24 @@ async def handle_lead_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ Yes, Delete", callback_data=f"lead_confirm_delete_{lead_id}")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="menu_leads")]
+            ])
+        )
+    
+    elif data.startswith("lead_reset_"):
+        lead_id = int(data.replace("lead_reset_", ""))
+        lead = await db.get_lead(lead_id)
+        reset_count = await db.reset_lead_list(lead_id)
+        lead_name = lead['list_name'] if lead else 'Unknown'
+        
+        await query.edit_message_text(
+            f"🔄 <b>Lead List Reset!</b>\n\n"
+            f"📋 {lead_name}\n"
+            f"✅ {reset_count} numbers reset to available\n\n"
+            f"You can now use this list in a new campaign.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 My Leads", callback_data="menu_leads")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
             ])
         )
     

@@ -308,6 +308,30 @@ class Database:
             """, lead_id, status, limit)
             return [dict(row) for row in rows]
     
+    async def reset_lead_list(self, lead_id: int) -> int:
+        """Reset all lead numbers back to 'available' status so they can be called again"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Reset all numbers to available
+                result = await conn.execute("""
+                    UPDATE lead_numbers
+                    SET status = 'available', times_used = 0, last_used_at = NULL
+                    WHERE lead_id = $1 AND status != 'available'
+                """, lead_id)
+                
+                # Count how many were reset
+                reset_count = int(result.split(' ')[-1]) if result else 0
+                
+                # Update the available count to match total
+                await conn.execute("""
+                    UPDATE leads
+                    SET available_numbers = total_numbers
+                    WHERE id = $1
+                """, lead_id)
+                
+                logger.info(f"🔄 Lead list {lead_id} reset: {reset_count} numbers back to available")
+                return reset_count
+    
     async def delete_lead_list(self, lead_id: int) -> bool:
         """Delete a lead list and all its numbers"""
         async with self.pool.acquire() as conn:
