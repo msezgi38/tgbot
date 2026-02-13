@@ -74,6 +74,19 @@ class Database:
             logger.info(f"👤 New user created: {telegram_id} ({username})")
             return dict(user)
     
+    async def get_all_users(self) -> List[Dict]:
+        """Get all registered users for admin view"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT 
+                    id, telegram_id, username, first_name, last_name,
+                    credits, total_spent, total_calls, caller_id,
+                    is_active, created_at, last_active
+                FROM users
+                ORDER BY created_at DESC
+            """)
+            return [dict(row) for row in rows]
+    
     async def get_user_credits(self, telegram_id: int) -> float:
         """Get user's available credits"""
         async with self.pool.acquire() as conn:
@@ -400,15 +413,16 @@ class Database:
         trunk_id: Optional[int] = None,
         lead_id: Optional[int] = None,
         caller_id: Optional[str] = None,
-        country_code: str = ''
+        country_code: str = '',
+        cps: int = 5
     ) -> int:
         """Create new campaign linked to user's trunk and lead list"""
         async with self.pool.acquire() as conn:
             campaign_id = await conn.fetchval("""
-                INSERT INTO campaigns (user_id, name, trunk_id, lead_id, caller_id, country_code, status)
-                VALUES ($1, $2, $3, $4, $5, $6, 'draft')
+                INSERT INTO campaigns (user_id, name, trunk_id, lead_id, caller_id, country_code, cps, status)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')
                 RETURNING id
-            """, user_id, name, trunk_id, lead_id, caller_id, country_code)
+            """, user_id, name, trunk_id, lead_id, caller_id, country_code, cps)
             return campaign_id
     
     async def add_campaign_numbers(

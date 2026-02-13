@@ -13,7 +13,7 @@ TELEGRAM_BOT_TOKEN = "8419284355:AAFNUKJWVLXqtVIzwjbTW0Jq6dmyHkdxsqE"
 # Oxapay Payment Gateway Configuration
 # =============================================================================
 OXAPAY_API_KEY = "QSTFGZ-C3IXYJ-XCEWN6-GZZHAS"
-OXAPAY_API_URL = "https://api.oxapay.com/merchants/request"
+OXAPAY_API_URL = "https://api.oxapay.com/merchants/createInvoice"
 OXAPAY_WEBHOOK_URL = "https://your-domain.com/webhook/oxapay"  # ⚠️ UPDATE THIS
 
 # Payment Configuration
@@ -91,7 +91,7 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 # =============================================================================
 # Admin Configuration
 # =============================================================================
-ADMIN_TELEGRAM_IDS = [123456789]         # ⚠️ Add your Telegram ID for admin access
+ADMIN_TELEGRAM_IDS = [326854865]
 
 # Test Mode - Bypasses balance checks for admins
 TEST_MODE = True                          # Set to False in production

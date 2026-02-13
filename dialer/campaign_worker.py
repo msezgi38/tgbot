@@ -102,7 +102,7 @@ class CampaignWorker:
                 SELECT 
                     c.id, c.user_id, c.name, c.caller_id, 
                     c.total_numbers, c.completed,
-                    c.trunk_id, c.lead_id, c.country_code,
+                    c.trunk_id, c.lead_id, c.country_code, c.cps,
                     ut.pjsip_endpoint_name as trunk_endpoint,
                     ut.caller_id as trunk_caller_id,
                     ut.max_channels as trunk_max_channels,
@@ -141,19 +141,23 @@ class CampaignWorker:
                 await self.pause_campaign(campaign_id, "Insufficient credits")
                 return
         
-        # Fetch pending numbers
-        numbers = await self.get_pending_numbers(campaign_id, limit=10)
+        # Determine CallerID: campaign override > trunk default > global default
+        caller_id = campaign.get('caller_id') or campaign.get('trunk_caller_id')
+        country_code = campaign.get('country_code', '')
+        campaign_cps = campaign.get('cps', MAX_CONCURRENT_CALLS)
+        campaign_semaphore = asyncio.Semaphore(campaign_cps)
+        
+        # Fetch pending numbers (batch size = CPS)
+        numbers = await self.get_pending_numbers(campaign_id, limit=campaign_cps)
         
         if not numbers:
             logger.info(f"✅ Campaign {campaign_id} completed")
             await self.complete_campaign(campaign_id)
             return
         
-        # Determine CallerID: campaign override > trunk default > global default
-        caller_id = campaign.get('caller_id') or campaign.get('trunk_caller_id')
-        country_code = campaign.get('country_code', '')
+        logger.info(f"📞 Campaign {campaign_id}: dialing {len(numbers)} numbers (CPS={campaign_cps})")
         
-        # Process each number
+        # Process each number with campaign-specific concurrency
         tasks = []
         for number_data in numbers:
             # Prepend country code if set

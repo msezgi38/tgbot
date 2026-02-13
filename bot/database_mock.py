@@ -97,6 +97,10 @@ class MockDatabase:
         
         return self.users[telegram_id]
     
+    async def get_all_users(self):
+        """Get all registered users"""
+        return list(self.users.values())
+    
     async def _create_sample_trunks(self, user_id: int):
         """Create sample trunks for demo"""
         sample_trunks = [
@@ -317,7 +321,8 @@ class MockDatabase:
         trunk_id: Optional[int] = None,
         lead_id: Optional[int] = None,
         caller_id: Optional[str] = None,
-        country_code: str = ''
+        country_code: str = '',
+        cps: int = 5
     ) -> int:
         campaign_id = self.next_campaign_id
         self.next_campaign_id += 1
@@ -338,6 +343,7 @@ class MockDatabase:
             'lead_id': lead_id,
             'caller_id': caller_id,
             'country_code': country_code,
+            'cps': cps,
             'trunk_name': trunk_name,
             'lead_name': lead_name,
             'total_numbers': 0,

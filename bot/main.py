@@ -254,18 +254,18 @@ async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             description=f"{package['credits']} credits for {user.username or user.id}"
         )
         
-        if payment and payment.get('trackId'):
+        if payment and payment.get('success'):
             await db.create_payment(
                 user_id=user_data['id'],
-                track_id=payment['trackId'],
+                track_id=payment['track_id'],
                 amount=package['price'],
                 credits=package['credits'],
                 currency=package['currency'],
-                payment_url=payment.get('payLink', '')
+                payment_url=payment.get('payment_url', '')
             )
             
             keyboard = [
-                [InlineKeyboardButton("💳 Pay Now", url=payment.get('payLink', ''))],
+                [InlineKeyboardButton("💳 Pay Now", url=payment.get('payment_url', ''))],
                 [InlineKeyboardButton("🔙 Back", callback_data="menu_main")]
             ]
             
@@ -278,7 +278,9 @@ async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         else:
-            await query.edit_message_text("❌ Payment creation failed. Try again later.")
+            error = payment.get('error', 'Unknown error') if payment else 'No response'
+            logger.error(f"❌ Oxapay payment failed: {error}")
+            await query.edit_message_text(f"❌ Payment failed: {error}")
     except Exception as e:
         logger.error(f"Payment error: {e}")
         await query.edit_message_text(f"❌ Error: {e}")
@@ -308,6 +310,67 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await update.message.reply_text(f"❌ {message}\n\nTry again or /cancel.", parse_mode='HTML')
+        return
+    
+    # --- Handle admin price editing ---
+    if context.user_data.get('editing_price') and user.id in ADMIN_TELEGRAM_IDS:
+        pkg_id = context.user_data['editing_price']
+        try:
+            new_price = float(update.message.text.strip())
+            if pkg_id in CREDIT_PACKAGES:
+                CREDIT_PACKAGES[pkg_id]['price'] = new_price
+                context.user_data['editing_price'] = None
+                await update.message.reply_text(
+                    f"✅ Updated! <b>{CREDIT_PACKAGES[pkg_id]['credits']} Credits</b> now costs <b>${new_price:.2f}</b>\n\n"
+                    f"Use /prices to see all packages.",
+                    parse_mode='HTML'
+                )
+            else:
+                context.user_data['editing_price'] = None
+                await update.message.reply_text("❌ Package not found.")
+        except ValueError:
+            await update.message.reply_text("❌ Send a valid number (e.g. 25.00)")
+        return
+    
+    # --- Handle admin price adding ---
+    if context.user_data.get('adding_price') and user.id in ADMIN_TELEGRAM_IDS:
+        step = context.user_data.get('adding_price_step')
+        text = update.message.text.strip()
+        
+        if step == 'credits':
+            try:
+                credits = int(text)
+                context.user_data['new_pkg_credits'] = credits
+                context.user_data['adding_price_step'] = 'price'
+                await update.message.reply_text(
+                    f"✅ Credits: <b>{credits}</b>\n\n"
+                    f"Step 2: Enter the price in USD (e.g. <code>25.00</code>):",
+                    parse_mode='HTML'
+                )
+            except ValueError:
+                await update.message.reply_text("❌ Send a whole number (e.g. 200)")
+        
+        elif step == 'price':
+            try:
+                price = float(text)
+                credits = context.user_data.get('new_pkg_credits', 0)
+                pkg_id = str(credits)
+                CREDIT_PACKAGES[pkg_id] = {
+                    "credits": credits,
+                    "price": price,
+                    "currency": "USDT"
+                }
+                context.user_data['adding_price'] = False
+                context.user_data.pop('adding_price_step', None)
+                context.user_data.pop('new_pkg_credits', None)
+                await update.message.reply_text(
+                    f"✅ Package added!\n\n"
+                    f"📦 <b>{credits} Credits</b> — ${price:.2f} USDT\n\n"
+                    f"Use /prices to see all packages.",
+                    parse_mode='HTML'
+                )
+            except ValueError:
+                await update.message.reply_text("❌ Send a valid price (e.g. 25.00)")
         return
     
     # --- Handle SIP trunk creation input ---
@@ -708,14 +771,49 @@ async def handle_campaign_setup(update: Update, context: ContextTypes.DEFAULT_TY
         )
     
     elif data.startswith("camp_cc_"):
-        # User selected country code - CREATE the campaign now
+        # User selected country code - show CPS selection
         country_code = data.replace("camp_cc_", "")
         if country_code == 'none':
             country_code = ''
         
+        context.user_data['campaign_country_code'] = country_code
+        context.user_data['campaign_step'] = 'select_cps'
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("1 Call", callback_data="camp_cps_1"),
+                InlineKeyboardButton("3 Calls", callback_data="camp_cps_3"),
+                InlineKeyboardButton("5 Calls", callback_data="camp_cps_5"),
+            ],
+            [
+                InlineKeyboardButton("10 Calls", callback_data="camp_cps_10"),
+                InlineKeyboardButton("20 Calls", callback_data="camp_cps_20"),
+                InlineKeyboardButton("30 Calls", callback_data="camp_cps_30"),
+            ],
+            [
+                InlineKeyboardButton("40 Calls", callback_data="camp_cps_40"),
+                InlineKeyboardButton("50 Calls", callback_data="camp_cps_50"),
+            ],
+            [InlineKeyboardButton("🔙 Back", callback_data="menu_main")]
+        ]
+        
+        await query.edit_message_text(
+            "📞 Step 6: <b>Concurrent Calls (CPS)</b>\n\n"
+            "How many calls should run at the same time?\n\n"
+            "⚡ Higher = Faster but more trunk load\n"
+            "🐢 Lower = Slower but more stable",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    elif data.startswith("camp_cps_"):
+        # User selected CPS - CREATE the campaign now
+        cps = int(data.replace("camp_cps_", ""))
+        
         trunk_id = context.user_data.get('campaign_trunk_id')
         lead_id = context.user_data.get('campaign_lead_id')
         campaign_name = context.user_data.get('campaign_name', 'Unnamed Campaign')
+        country_code = context.user_data.get('campaign_country_code', '')
         
         lead = await db.get_lead(lead_id)
         trunk = await db.get_trunk(trunk_id) if trunk_id else None
@@ -726,12 +824,13 @@ async def handle_campaign_setup(update: Update, context: ContextTypes.DEFAULT_TY
             trunk_id=trunk_id,
             lead_id=lead_id,
             caller_id=user_data.get('caller_id'),
-            country_code=country_code
+            country_code=country_code,
+            cps=cps
         )
         
-        # Store country code for this campaign
+        # Store campaign settings
         context.user_data['campaign_id'] = campaign_id
-        context.user_data['campaign_country_code'] = country_code
+        context.user_data['campaign_cps'] = cps
         context.user_data['creating_campaign'] = False
         
         avail = lead.get('available_numbers', 0) if lead else 0
@@ -744,7 +843,8 @@ async def handle_campaign_setup(update: Update, context: ContextTypes.DEFAULT_TY
             f"📛 Name: {campaign_name}\n"
             f"🔌 Trunk: {trunk_name}\n"
             f"📋 Leads: {lead_name} ({avail} numbers)\n"
-            f"🌍 Country: {cc_display}\n\n"
+            f"🌍 Country: {cc_display}\n"
+            f"📞 CPS: {cps} concurrent calls\n\n"
             f"Click START to begin calling!",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup([
@@ -823,7 +923,16 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
         context.user_data['campaign_step'] = 'name'
         
         await query.edit_message_text(
-            "📝 <b>Create New Campaign</b>\n\nStep 1: Enter campaign name\n\nExample: Product Launch 2026",
+            "🚀 <b>Create New Campaign</b>\n\n"
+            "<b>Campaign Setup Flow:</b>\n"
+            "1️⃣ Campaign Name\n"
+            "2️⃣ Voice File (upload or select)\n"
+            "3️⃣ Select SIP Trunk\n"
+            "4️⃣ Select Lead List\n"
+            "5️⃣ Country Code\n"
+            "6️⃣ Concurrent Calls (CPS)\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "📝 <b>Step 1:</b> Enter campaign name:",
             parse_mode='HTML'
         )
     
@@ -1350,6 +1459,123 @@ async def post_shutdown(application: Application):
     logger.info("🛑 Bot stopped")
 
 
+# =============================================================================
+# Admin Commands
+# =============================================================================
+
+async def admin_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /users command - Admin only: list all registered users"""
+    user = update.effective_user
+    if user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("❌ Admin only command.")
+        return
+    
+    all_users = await db.get_all_users()
+    
+    if not all_users:
+        await update.message.reply_text("📭 No registered users yet.")
+        return
+    
+    text = f"👥 <b>Registered Users ({len(all_users)})</b>\n\n"
+    
+    for i, u in enumerate(all_users, 1):
+        username = u.get('username', 'N/A') or 'N/A'
+        name = u.get('first_name', '') or ''
+        credits = u.get('credits', 0)
+        calls = u.get('total_calls', 0)
+        created = u.get('created_at')
+        last_active = u.get('last_active')
+        status = '🟢' if u.get('is_active', True) else '🔴'
+        tg_id = u.get('telegram_id', 'N/A')
+        
+        created_str = created.strftime('%d/%m/%Y %H:%M') if created else 'N/A'
+        active_str = last_active.strftime('%d/%m/%Y %H:%M') if last_active else 'N/A'
+        
+        text += (
+            f"{status} <b>{i}. {name}</b> (@{username})\n"
+            f"   🆔 <code>{tg_id}</code>\n"
+            f"   💰 ${credits:.2f} | 📞 {calls} calls\n"
+            f"   📅 Registered: {created_str}\n"
+            f"   🕐 Last active: {active_str}\n\n"
+        )
+        
+        # Telegram message limit - split if too long
+        if len(text) > 3500:
+            text += f"... and {len(all_users) - i} more users"
+            break
+    
+    await update.message.reply_text(text, parse_mode='HTML')
+
+async def admin_prices_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /prices command - Admin only"""
+    user = update.effective_user
+    if user.id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("❌ Admin only command.")
+        return
+    
+    text = "💰 <b>Credit Packages</b>\n\n"
+    keyboard = []
+    
+    for pkg_id, pkg in CREDIT_PACKAGES.items():
+        text += f"📦 <b>{pkg['credits']} Credits</b> — ${pkg['price']:.2f} {pkg['currency']}\n"
+        keyboard.append([
+            InlineKeyboardButton(f"✏️ Edit {pkg['credits']}cr", callback_data=f"price_edit_{pkg_id}"),
+            InlineKeyboardButton(f"🗑️ Delete", callback_data=f"price_del_{pkg_id}")
+        ])
+    
+    keyboard.append([InlineKeyboardButton("➕ Add New Package", callback_data="price_add")])
+    
+    text += "\nTap edit to change a package price."
+    
+    await update.message.reply_text(
+        text, parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def handle_admin_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin price management callbacks"""
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    
+    if user.id not in ADMIN_TELEGRAM_IDS:
+        await query.edit_message_text("❌ Admin only.")
+        return
+    
+    data = query.data
+    
+    if data.startswith("price_edit_"):
+        pkg_id = data.replace("price_edit_", "")
+        if pkg_id in CREDIT_PACKAGES:
+            pkg = CREDIT_PACKAGES[pkg_id]
+            context.user_data['editing_price'] = pkg_id
+            await query.edit_message_text(
+                f"✏️ <b>Edit Package: {pkg['credits']} Credits</b>\n\n"
+                f"Current price: ${pkg['price']:.2f}\n\n"
+                f"Send the new price (number only, e.g. <code>25.00</code>):",
+                parse_mode='HTML'
+            )
+    
+    elif data.startswith("price_del_"):
+        pkg_id = data.replace("price_del_", "")
+        if pkg_id in CREDIT_PACKAGES:
+            del CREDIT_PACKAGES[pkg_id]
+            await query.edit_message_text(
+                f"🗑️ Package deleted!\n\nUse /prices to see updated list."
+            )
+    
+    elif data == "price_add":
+        context.user_data['adding_price'] = True
+        context.user_data['adding_price_step'] = 'credits'
+        await query.edit_message_text(
+            "➕ <b>Add New Package</b>\n\n"
+            "Step 1: How many credits?\n"
+            "Send a number (e.g. <code>200</code>):",
+            parse_mode='HTML'
+        )
+
+
 def main():
     """Main function to run the bot"""
     
@@ -1368,6 +1594,8 @@ def main():
     application.add_handler(CommandHandler("new_campaign", new_campaign_command))
     application.add_handler(CommandHandler("campaigns", campaigns_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("prices", admin_prices_command))
+    application.add_handler(CommandHandler("users", admin_users_command))
     
     # Callback handlers
     application.add_handler(CallbackQueryHandler(handle_buy_callback, pattern="^buy_"))
@@ -1375,6 +1603,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_campaign_setup, pattern="^camp_"))
     application.add_handler(CallbackQueryHandler(handle_trunk_callbacks, pattern="^trunk_"))
     application.add_handler(CallbackQueryHandler(handle_lead_callbacks, pattern="^lead_"))
+    application.add_handler(CallbackQueryHandler(handle_admin_price_callback, pattern="^price_"))
     application.add_handler(CallbackQueryHandler(handle_menu_callbacks, pattern="^menu_"))
     application.add_handler(CallbackQueryHandler(handle_voice_selection, pattern="^voice_"))
     application.add_handler(CallbackQueryHandler(handle_cid_callbacks, pattern="^(cid_|setcid_)"))
