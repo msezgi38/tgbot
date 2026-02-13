@@ -78,6 +78,12 @@ Ready to launch your campaign?
             InlineKeyboardButton("💬 Contact Support", callback_data="menu_support")
         ]
     ]
+    
+    # Add admin panel button for admins
+    if user.id in ADMIN_TELEGRAM_IDS:
+        keyboard.append([
+            InlineKeyboardButton("🛡️ Admin Panel", callback_data="menu_admin")
+        ])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
@@ -904,7 +910,130 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
             ]
         ]
         
+        # Add admin panel button for admins
+        if user.id in ADMIN_TELEGRAM_IDS:
+            keyboard.append([
+                InlineKeyboardButton("🛡️ Admin Panel", callback_data="menu_admin")
+            ])
+        
         await query.edit_message_text(dashboard_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif action == "admin":
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            await query.edit_message_text("❌ Admin only.")
+            return
+        
+        all_users = await db.get_all_users()
+        user_count = len(all_users) if all_users else 0
+        
+        admin_text = (
+            "🛡️ <b>Admin Panel</b>\n\n"
+            f"👥 Total Users: <b>{user_count}</b>\n"
+            f"📦 Credit Packages: <b>{len(CREDIT_PACKAGES)}</b>\n\n"
+            "Select an option:"
+        )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("👥 View Users", callback_data="menu_admin_users"),
+                InlineKeyboardButton("💰 Manage Prices", callback_data="menu_admin_prices")
+            ],
+            [
+                InlineKeyboardButton("📊 System Stats", callback_data="menu_admin_stats")
+            ],
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+        ]
+        
+        await query.edit_message_text(admin_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif action == "admin_users":
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        
+        all_users = await db.get_all_users()
+        if not all_users:
+            await query.edit_message_text(
+                "📭 No registered users yet.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="menu_admin")]])
+            )
+            return
+        
+        text = f"👥 <b>Registered Users ({len(all_users)})</b>\n\n"
+        for i, u in enumerate(all_users, 1):
+            username = u.get('username', 'N/A') or 'N/A'
+            name = u.get('first_name', '') or ''
+            credits = u.get('credits', 0)
+            calls = u.get('total_calls', 0)
+            created = u.get('created_at')
+            last_active = u.get('last_active')
+            status = '🟢' if u.get('is_active', True) else '🔴'
+            tg_id = u.get('telegram_id', 'N/A')
+            
+            created_str = created.strftime('%d/%m/%Y %H:%M') if created else 'N/A'
+            active_str = last_active.strftime('%d/%m/%Y %H:%M') if last_active else 'N/A'
+            
+            text += (
+                f"{status} <b>{i}. {name}</b> (@{username})\n"
+                f"   🆔 <code>{tg_id}</code>\n"
+                f"   💰 ${credits:.2f} | 📞 {calls} calls\n"
+                f"   📅 {created_str} | 🕐 {active_str}\n\n"
+            )
+            if len(text) > 3500:
+                text += f"... +{len(all_users) - i} more"
+                break
+        
+        await query.edit_message_text(
+            text, parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh", callback_data="menu_admin_users")],
+                [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")]
+            ])
+        )
+    
+    elif action == "admin_prices":
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        
+        text = "💰 <b>Credit Packages</b>\n\n"
+        keyboard = []
+        for pkg_id, pkg in CREDIT_PACKAGES.items():
+            text += f"📦 <b>{pkg['credits']} Credits</b> — ${pkg['price']:.2f} {pkg['currency']}\n"
+            keyboard.append([
+                InlineKeyboardButton(f"✏️ Edit {pkg['credits']}cr", callback_data=f"price_edit_{pkg_id}"),
+                InlineKeyboardButton(f"🗑️ Delete", callback_data=f"price_del_{pkg_id}")
+            ])
+        keyboard.append([InlineKeyboardButton("➕ Add Package", callback_data="price_add")])
+        keyboard.append([InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")])
+        text += "\nTap edit to change price."
+        
+        await query.edit_message_text(text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif action == "admin_stats":
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        
+        all_users = await db.get_all_users()
+        total_users = len(all_users) if all_users else 0
+        total_credits = sum(u.get('credits', 0) for u in all_users) if all_users else 0
+        total_spent = sum(u.get('total_spent', 0) for u in all_users) if all_users else 0
+        total_calls = sum(u.get('total_calls', 0) for u in all_users) if all_users else 0
+        
+        text = (
+            "📊 <b>System Statistics</b>\n\n"
+            f"👥 Total Users: <b>{total_users}</b>\n"
+            f"💰 Total Credits in System: <b>${total_credits:.2f}</b>\n"
+            f"💵 Total Revenue: <b>${total_spent:.2f}</b>\n"
+            f"📞 Total Calls Made: <b>{total_calls}</b>\n"
+            f"📦 Credit Packages: <b>{len(CREDIT_PACKAGES)}</b>\n"
+        )
+        
+        await query.edit_message_text(
+            text, parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh", callback_data="menu_admin_stats")],
+                [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")]
+            ])
+        )
     
     elif action == "launch":
         balance = user_data.get('credits', user_data.get('balance', 0))
