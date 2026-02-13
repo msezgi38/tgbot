@@ -7,6 +7,8 @@
 import logging
 import csv
 import io
+import sys
+import os
 import asyncio
 import subprocess
 from datetime import datetime
@@ -27,11 +29,36 @@ from database import db
 from oxapay_handler import oxapay
 from ui_components import ui
 
+# Add dialer directory to path for PJSIPGenerator import
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dialer'))
+from pjsip_generator import PJSIPGenerator
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+
+async def regenerate_pjsip() -> str:
+    """Regenerate PJSIP config from database and reload Asterisk"""
+    generator = PJSIPGenerator()
+    try:
+        await generator.connect()
+        config_path = await generator.write_config()
+        success = generator.reload_asterisk()
+        if success:
+            logger.info("✅ PJSIP config regenerated and reloaded")
+            return '\n\n✅ PJSIP config updated & reloaded - trunk is active!'
+        else:
+            logger.warning("⚠️ PJSIP config written but reload failed")
+            return '\n\n⚠️ Config updated but PJSIP reload failed - restart Asterisk manually'
+    except Exception as e:
+        logger.error(f"❌ PJSIP regeneration error: {e}")
+        return f'\n\n⚠️ Could not auto-reload Asterisk: {str(e)[:100]}'
+    finally:
+        await generator.close()
 
 
 # =============================================================================
@@ -429,19 +456,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop('trunk_host', None)
             context.user_data.pop('trunk_username', None)
             
-            # Auto-reload PJSIP
-            reload_status = ''
-            try:
-                result = subprocess.run(
-                    ASTERISK_RELOAD_CMD, shell=True,
-                    capture_output=True, text=True, timeout=10
-                )
-                if result.returncode == 0:
-                    reload_status = '\n\n✅ PJSIP reloaded - trunk is active!'
-                else:
-                    reload_status = '\n\n⚠️ PJSIP reload failed - restart manually'
-            except Exception:
-                reload_status = '\n\n⚠️ Could not auto-reload Asterisk'
+            # Auto-regenerate PJSIP config and reload Asterisk
+            reload_status = await regenerate_pjsip()
             
             await update.message.reply_text(
                 f"✅ <b>Trunk Created!</b>\n\n"
@@ -1514,8 +1530,11 @@ async def handle_trunk_callbacks(update: Update, context: ContextTypes.DEFAULT_T
         try:
             await db.delete_trunk(trunk_id)
             
+            # Regenerate PJSIP config to remove deleted trunk
+            reload_status = await regenerate_pjsip()
+            
             await query.edit_message_text(
-                "✅ Trunk deleted.",
+                f"✅ Trunk deleted.{reload_status}",
                 parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
