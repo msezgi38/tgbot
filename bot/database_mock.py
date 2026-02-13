@@ -1,7 +1,8 @@
 # =============================================================================
-# Mock Database for UI Testing
+# Mock Database for UI Testing (User-Scoped PJSIP)
 # =============================================================================
 # Dummy data version - No PostgreSQL required
+# Supports per-user trunks, leads, campaigns
 # =============================================================================
 
 from typing import Optional, Dict, List
@@ -17,35 +18,29 @@ class MockDatabase:
     
     def __init__(self):
         self.connected = False
-        # Mock data storage
         self.users = {}
         self.campaigns = {}
-        self.next_campaign_id = 1
+        self.next_campaign_id = 100
         
-        # Voice files storage - saved uploaded voice files
+        # Per-user trunks
+        self.trunks = {}
+        self.next_trunk_id = 1
+        
+        # Per-user leads
+        self.leads_store = {}
+        self.next_lead_id = 1
+        self.lead_numbers_store = {}
+        self.next_lead_number_id = 1
+        
+        # Voice files
         self.voice_files = {
-            1: {
-                'id': 1,
-                'name': 'Product Intro Voice',
-                'duration': 45,
-                'uploaded_at': datetime.now() - timedelta(days=5)
-            },
-            2: {
-                'id': 2,
-                'name': 'Survey Questions',
-                'duration': 32,
-                'uploaded_at': datetime.now() - timedelta(days=2)
-            },
-            3: {
-                'id': 3,
-                'name': 'Event Invitation',
-                'duration': 28,
-                'uploaded_at': datetime.now() - timedelta(hours=12)
-            }
+            1: {'id': 1, 'name': 'Product Intro Voice', 'duration': 45, 'uploaded_at': datetime.now() - timedelta(days=5)},
+            2: {'id': 2, 'name': 'Survey Questions', 'duration': 32, 'uploaded_at': datetime.now() - timedelta(days=2)},
+            3: {'id': 3, 'name': 'Event Invitation', 'duration': 28, 'uploaded_at': datetime.now() - timedelta(hours=12)},
         }
         self.next_voice_id = 4
         
-        # Preset Caller IDs - Verified, high-performance numbers
+        # Preset CIDs
         self.preset_cids = [
             {'id': 1, 'number': '18889092337', 'name': 'Premium CID #1', 'verified': True},
             {'id': 2, 'number': '18552847621', 'name': 'Premium CID #2', 'verified': True},
@@ -54,15 +49,12 @@ class MockDatabase:
         ]
         
     async def connect(self):
-        """Simulate database connection"""
         self.connected = True
         logger.info("✅ Mock Database connected (UI Test Mode)")
         return True
     
     async def close(self):
-        """Simulate database close"""
         self.connected = False
-        logger.info("Mock Database disconnected")
     
     # =========================================================================
     # User Operations
@@ -75,46 +67,244 @@ class MockDatabase:
         first_name: Optional[str] = None,
         last_name: Optional[str] = None
     ) -> Dict:
-        """Get or create mock user"""
         if telegram_id not in self.users:
-            # Create new user with 1337 default settings
             self.users[telegram_id] = {
                 'id': len(self.users) + 1,
                 'telegram_id': telegram_id,
                 'username': username,
                 'first_name': first_name or 'Test User',
                 'last_name': last_name,
-                # Balance & Credits
-                'balance': 22.60,  # Current balance in dollars
-                'credits': 22.60,  # Alias for compatibility
+                'balance': 22.60,
+                'credits': 22.60,
                 'total_spent': 234.50,
                 'total_calls': 567,
-                # Caller ID Settings
-                'caller_id': '18889092337',  # Default caller ID
-                'country_code': '+1',  # US default
-                # System Info
-                'available_lines': 112,  # System capacity
-                'lines_used': 437,  # Total lifetime usage
-                'system_status': 'Ready',  # Ready, Maintenance, etc.
-                # Account Status
+                'caller_id': '18889092337',
+                'country_code': '+1',
+                'available_lines': 112,
+                'lines_used': 437,
+                'system_status': 'Ready',
                 'is_active': True,
                 'created_at': datetime.now() - timedelta(days=30),
                 'last_active': datetime.now()
             }
+            
+            # Create sample trunks for new user
+            user_id = self.users[telegram_id]['id']
+            await self._create_sample_trunks(user_id)
+            await self._create_sample_leads(user_id)
+            
             logger.info(f"👤 Mock user created: {telegram_id} ({username})")
         
         return self.users[telegram_id]
     
+    async def _create_sample_trunks(self, user_id: int):
+        """Create sample trunks for demo"""
+        sample_trunks = [
+            {'name': 'MagnusBilling #1', 'sip_host': 'sip.1337global.sbs', 'sip_username': 'user1', 'sip_password': '***', 'status': 'active'},
+            {'name': 'VoIP.ms Trunk', 'sip_host': 'atlanta.voip.ms', 'sip_username': 'user2', 'sip_password': '***', 'status': 'active'},
+        ]
+        for t in sample_trunks:
+            trunk_id = self.next_trunk_id
+            self.next_trunk_id += 1
+            self.trunks[trunk_id] = {
+                'id': trunk_id,
+                'user_id': user_id,
+                'name': t['name'],
+                'sip_host': t['sip_host'],
+                'sip_port': 5060,
+                'sip_username': t['sip_username'],
+                'sip_password': t['sip_password'],
+                'transport': 'udp',
+                'codecs': 'ulaw,alaw,gsm',
+                'caller_id': None,
+                'max_channels': 10,
+                'status': t['status'],
+                'pjsip_endpoint_name': f'user_{user_id}_trunk_{trunk_id}',
+                'created_at': datetime.now() - timedelta(days=10),
+                'updated_at': datetime.now() - timedelta(days=10),
+            }
+    
+    async def _create_sample_leads(self, user_id: int):
+        """Create sample lead lists for demo"""
+        sample_leads = [
+            {'list_name': 'US Contacts Jan 2026', 'total': 500, 'available': 350},
+            {'list_name': 'UK Prospects', 'total': 200, 'available': 200},
+            {'list_name': 'VIP Customers', 'total': 50, 'available': 50},
+        ]
+        for sl in sample_leads:
+            lead_id = self.next_lead_id
+            self.next_lead_id += 1
+            self.leads_store[lead_id] = {
+                'id': lead_id,
+                'user_id': user_id,
+                'list_name': sl['list_name'],
+                'description': None,
+                'total_numbers': sl['total'],
+                'available_numbers': sl['available'],
+                'created_at': datetime.now() - timedelta(days=7),
+            }
+    
     async def get_user_credits(self, telegram_id: int) -> float:
-        """Get user credits"""
         user = await self.get_or_create_user(telegram_id)
         return user['credits']
     
     async def add_credits(self, telegram_id: int, amount: float) -> float:
-        """Add credits to user"""
         user = await self.get_or_create_user(telegram_id)
         user['credits'] += amount
+        user['balance'] += amount
         return user['credits']
+    
+    async def set_caller_id(self, telegram_id: int, caller_id: str) -> bool:
+        user = await self.get_or_create_user(telegram_id)
+        user['caller_id'] = caller_id
+        return True
+    
+    async def validate_cid(self, cid: str) -> tuple:
+        clean_cid = ''.join(filter(str.isdigit, cid))
+        if len(clean_cid) < 10 or len(clean_cid) > 15:
+            return False, "CID must be 10-15 digits"
+        return True, "CID validated successfully"
+    
+    # =========================================================================
+    # SIP Trunk Operations (Per-User)
+    # =========================================================================
+    
+    async def create_trunk(
+        self,
+        user_id: int,
+        name: str,
+        sip_host: str,
+        sip_username: str,
+        sip_password: str,
+        sip_port: int = 5060,
+        transport: str = 'udp',
+        codecs: str = 'ulaw,alaw,gsm',
+        caller_id: Optional[str] = None,
+        max_channels: int = 10
+    ) -> Dict:
+        trunk_id = self.next_trunk_id
+        self.next_trunk_id += 1
+        
+        endpoint_name = f"user_{user_id}_trunk_{trunk_id}"
+        trunk = {
+            'id': trunk_id,
+            'user_id': user_id,
+            'name': name,
+            'sip_host': sip_host,
+            'sip_port': sip_port,
+            'sip_username': sip_username,
+            'sip_password': sip_password,
+            'transport': transport,
+            'codecs': codecs,
+            'caller_id': caller_id,
+            'max_channels': max_channels,
+            'status': 'active',
+            'pjsip_endpoint_name': endpoint_name,
+            'created_at': datetime.now(),
+            'updated_at': datetime.now(),
+        }
+        self.trunks[trunk_id] = trunk
+        logger.info(f"🔌 Trunk created: {endpoint_name}")
+        return trunk
+    
+    async def get_user_trunks(self, user_id: int) -> List[Dict]:
+        return [t for t in self.trunks.values() if t['user_id'] == user_id]
+    
+    async def get_trunk(self, trunk_id: int) -> Optional[Dict]:
+        return self.trunks.get(trunk_id)
+    
+    async def update_trunk(self, trunk_id: int, **kwargs) -> bool:
+        if trunk_id in self.trunks:
+            for k, v in kwargs.items():
+                if k in self.trunks[trunk_id]:
+                    self.trunks[trunk_id][k] = v
+            self.trunks[trunk_id]['updated_at'] = datetime.now()
+            return True
+        return False
+    
+    async def delete_trunk(self, trunk_id: int) -> bool:
+        if trunk_id in self.trunks:
+            del self.trunks[trunk_id]
+            return True
+        return False
+    
+    async def get_active_trunks(self) -> List[Dict]:
+        return [t for t in self.trunks.values() if t['status'] == 'active']
+    
+    # =========================================================================
+    # Lead Operations (Per-User)
+    # =========================================================================
+    
+    async def create_lead_list(
+        self,
+        user_id: int,
+        list_name: str,
+        description: Optional[str] = None
+    ) -> int:
+        lead_id = self.next_lead_id
+        self.next_lead_id += 1
+        
+        self.leads_store[lead_id] = {
+            'id': lead_id,
+            'user_id': user_id,
+            'list_name': list_name,
+            'description': description,
+            'total_numbers': 0,
+            'available_numbers': 0,
+            'created_at': datetime.now(),
+        }
+        logger.info(f"📋 Lead list created: {list_name}")
+        return lead_id
+    
+    async def add_lead_numbers(self, lead_id: int, phone_numbers: List[str]) -> int:
+        count = len(phone_numbers)
+        if lead_id in self.leads_store:
+            self.leads_store[lead_id]['total_numbers'] += count
+            self.leads_store[lead_id]['available_numbers'] += count
+        
+        for num in phone_numbers:
+            num_id = self.next_lead_number_id
+            self.next_lead_number_id += 1
+            self.lead_numbers_store[num_id] = {
+                'id': num_id,
+                'lead_id': lead_id,
+                'phone_number': num,
+                'status': 'available',
+                'times_used': 0,
+            }
+        
+        return count
+    
+    async def get_user_leads(self, user_id: int) -> List[Dict]:
+        return [l for l in self.leads_store.values() if l['user_id'] == user_id]
+    
+    async def get_lead(self, lead_id: int) -> Optional[Dict]:
+        return self.leads_store.get(lead_id)
+    
+    async def get_lead_numbers(self, lead_id: int, status: str = 'available', limit: int = 100) -> List[Dict]:
+        numbers = [n for n in self.lead_numbers_store.values() 
+                   if n['lead_id'] == lead_id and n['status'] == status]
+        return numbers[:limit]
+    
+    async def delete_lead_list(self, lead_id: int) -> bool:
+        if lead_id in self.leads_store:
+            # Remove numbers too
+            to_remove = [nid for nid, n in self.lead_numbers_store.items() if n['lead_id'] == lead_id]
+            for nid in to_remove:
+                del self.lead_numbers_store[nid]
+            del self.leads_store[lead_id]
+            return True
+        return False
+    
+    async def copy_leads_to_campaign(self, campaign_id: int, lead_id: int) -> int:
+        """Mock: copy leads to campaign data"""
+        if lead_id not in self.leads_store:
+            return 0
+        lead = self.leads_store[lead_id]
+        count = lead.get('available_numbers', 0)
+        if campaign_id in self.campaigns:
+            self.campaigns[campaign_id]['total_numbers'] = count
+        return count
     
     # =========================================================================
     # Campaign Operations
@@ -124,17 +314,30 @@ class MockDatabase:
         self,
         user_id: int,
         name: str,
+        trunk_id: Optional[int] = None,
+        lead_id: Optional[int] = None,
         caller_id: Optional[str] = None
     ) -> int:
-        """Create mock campaign"""
         campaign_id = self.next_campaign_id
         self.next_campaign_id += 1
+        
+        trunk_name = None
+        if trunk_id and trunk_id in self.trunks:
+            trunk_name = self.trunks[trunk_id]['name']
+        
+        lead_name = None
+        if lead_id and lead_id in self.leads_store:
+            lead_name = self.leads_store[lead_id]['list_name']
         
         self.campaigns[campaign_id] = {
             'id': campaign_id,
             'user_id': user_id,
             'name': name,
+            'trunk_id': trunk_id,
+            'lead_id': lead_id,
             'caller_id': caller_id,
+            'trunk_name': trunk_name,
+            'lead_name': lead_name,
             'total_numbers': 0,
             'completed': 0,
             'answered': 0,
@@ -147,11 +350,9 @@ class MockDatabase:
             'started_at': None,
             'completed_at': None
         }
-        
         return campaign_id
     
     async def add_campaign_numbers(self, campaign_id: int, phone_numbers: List[str]) -> int:
-        """Add numbers to campaign"""
         if campaign_id in self.campaigns:
             count = len(phone_numbers)
             self.campaigns[campaign_id]['total_numbers'] = count
@@ -159,71 +360,51 @@ class MockDatabase:
         return len(phone_numbers)
     
     async def start_campaign(self, campaign_id: int) -> bool:
-        """Start campaign"""
         if campaign_id in self.campaigns:
-            self.campaigns[campaign_id]['status'] = 'running'
-            self.campaigns[campaign_id]['started_at'] = datetime.now()
+            camp = self.campaigns[campaign_id]
+            camp['status'] = 'running'
+            camp['started_at'] = datetime.now()
+            # Copy leads if linked
+            if camp.get('lead_id') and camp['total_numbers'] == 0:
+                await self.copy_leads_to_campaign(campaign_id, camp['lead_id'])
         return True
     
     async def stop_campaign(self, campaign_id: int) -> bool:
-        """Pause campaign"""
         if campaign_id in self.campaigns:
             self.campaigns[campaign_id]['status'] = 'paused'
         return True
     
+    async def get_campaign(self, campaign_id: int) -> Optional[Dict]:
+        return self.campaigns.get(campaign_id)
+    
     async def get_campaign_stats(self, campaign_id: int) -> Dict:
-        """Get campaign statistics"""
-        if campaign_id in self.campaigns:
-            return self.campaigns[campaign_id]
-        return {}
+        return self.campaigns.get(campaign_id, {})
     
     async def get_user_campaigns(self, user_id: int, limit: int = 10) -> List[Dict]:
-        """Get user campaigns with mock data"""
-        # Create some sample campaigns for demo
         sample_campaigns = [
             {
-                'id': 1,
-                'name': 'Product Launch 2026',
-                'total_numbers': 100,
-                'completed': 85,
-                'pressed_one': 28,
-                'status': 'running',
-                'actual_cost': 14.50,
+                'id': 1, 'name': 'Product Launch 2026', 'total_numbers': 100,
+                'completed': 85, 'pressed_one': 28, 'status': 'running',
+                'actual_cost': 14.50, 'trunk_name': 'MagnusBilling #1',
+                'lead_name': 'US Contacts Jan 2026',
                 'created_at': datetime.now() - timedelta(hours=2)
             },
             {
-                'id': 2,
-                'name': 'Lead Generation Q1',
-                'total_numbers': 250,
-                'completed': 250,
-                'pressed_one': 67,
-                'status': 'completed',
-                'actual_cost': 42.30,
+                'id': 2, 'name': 'Lead Generation Q1', 'total_numbers': 250,
+                'completed': 250, 'pressed_one': 67, 'status': 'completed',
+                'actual_cost': 42.30, 'trunk_name': 'VoIP.ms Trunk',
+                'lead_name': 'UK Prospects',
                 'created_at': datetime.now() - timedelta(days=3)
             },
             {
-                'id': 3,
-                'name': 'Customer Survey',
-                'total_numbers': 50,
-                'completed': 12,
-                'pressed_one': 4,
-                'status': 'paused',
-                'actual_cost': 2.80,
+                'id': 3, 'name': 'Customer Survey', 'total_numbers': 50,
+                'completed': 12, 'pressed_one': 4, 'status': 'paused',
+                'actual_cost': 2.80, 'trunk_name': 'MagnusBilling #1',
+                'lead_name': 'VIP Customers',
                 'created_at': datetime.now() - timedelta(days=1)
             },
-            {
-                'id': 4,
-                'name': 'Event Invitation',
-                'total_numbers': 150,
-                'completed': 0,
-                'pressed_one': 0,
-                'status': 'draft',
-                'actual_cost': 0.00,
-                'created_at': datetime.now() - timedelta(hours=6)
-            }
         ]
         
-        # Add any real campaigns created during testing
         for campaign in self.campaigns.values():
             if campaign['user_id'] == user_id:
                 sample_campaigns.append(campaign)
@@ -231,233 +412,77 @@ class MockDatabase:
         return sample_campaigns[:limit]
     
     # =========================================================================
+    # Voice Files
+    # =========================================================================
+    
+    async def get_user_voice_files(self, user_id: int) -> List[Dict]:
+        return list(self.voice_files.values())
+    
+    async def save_voice_file(self, user_id: int, name: str, duration: int = 30) -> int:
+        voice_id = self.next_voice_id
+        self.next_voice_id += 1
+        self.voice_files[voice_id] = {
+            'id': voice_id, 'name': name, 'duration': duration,
+            'uploaded_at': datetime.now()
+        }
+        return voice_id
+    
+    async def get_voice_file(self, voice_id: int) -> Dict:
+        return self.voice_files.get(voice_id, {})
+    
+    # =========================================================================
     # Statistics
     # =========================================================================
     
     async def get_user_stats(self, telegram_id: int) -> Dict:
-        """Get user statistics"""
         user = await self.get_or_create_user(telegram_id)
+        user_id = user['id']
+        trunk_count = len([t for t in self.trunks.values() if t['user_id'] == user_id])
+        lead_count = len([l for l in self.leads_store.values() if l['user_id'] == user_id])
         
         return {
             'credits': user['credits'],
             'total_spent': user['total_spent'],
             'total_calls': user['total_calls'],
             'created_at': user['created_at'],
-            'campaign_count': 4  # Mock campaign count
+            'campaign_count': 4,
+            'trunk_count': trunk_count,
+            'lead_count': lead_count,
         }
     
     # =========================================================================
     # Payment Operations (Mock)
     # =========================================================================
     
-    async def create_payment(
-        self,
-        user_id: int,
-        track_id: str,
-        amount: float,
-        credits: float,
-        currency: str = "USDT",
-        payment_url: str = None
-    ) -> int:
-        """Create mock payment"""
+    async def create_payment(self, user_id, track_id, amount, credits, currency="USDT", payment_url=None) -> int:
         logger.info(f"💳 Mock payment created: {credits} credits for ${amount}")
         return 1
     
-    async def confirm_payment(self, track_id: str, tx_hash: Optional[str] = None) -> bool:
-        """Mock payment confirmation"""
-        logger.info(f"✅ Mock payment confirmed: {track_id}")
+    async def confirm_payment(self, track_id, tx_hash=None) -> bool:
         return True
     
     # =========================================================================
-    # Voice Files Management
-    # =========================================================================
-    
-    async def get_user_voice_files(self, user_id: int) -> List[Dict]:
-        """Get all saved voice files for a user"""
-        # For mock, return all voice files
-        return list(self.voice_files.values())
-    
-    async def save_voice_file(self, user_id: int, name: str, duration: int = 30) -> int:
-        """Save a new voice file"""
-        voice_id = self.next_voice_id
-        self.next_voice_id += 1
-        
-        self.voice_files[voice_id] = {
-            'id': voice_id,
-            'name': name,
-            'duration': duration,
-            'uploaded_at': datetime.now()
-        }
-        
-        logger.info(f"🎤 Voice file saved: {name}")
-        return voice_id
-    
-    async def get_voice_file(self, voice_id: int) -> Dict:
-        """Get a specific voice file"""
-        return self.voice_files.get(voice_id, {})
-    
-    # =========================================================================
-    # Caller ID Management
+    # Caller ID & Misc
     # =========================================================================
     
     async def get_preset_cids(self) -> List[Dict]:
-        """Get list of preset verified caller IDs"""
         return self.preset_cids
     
-    async def set_caller_id(self, telegram_id: int, caller_id: str) -> bool:
-        """Set user's caller ID"""
-        user = await self.get_or_create_user(telegram_id)
-        user['caller_id'] = caller_id
-        logger.info(f"📞 Caller ID set: {caller_id} for user {telegram_id}")
-        return True
-    
     async def get_caller_id(self, telegram_id: int) -> str:
-        """Get user's current caller ID"""
         user = await self.get_or_create_user(telegram_id)
         return user.get('caller_id', '18889092337')
     
-    async def validate_cid(self, cid: str) -> tuple[bool, str]:
-        """Validate caller ID format and check blacklist"""
-        # Remove any non-digits
-        clean_cid = ''.join(filter(str.isdigit, cid))
-        
-        # Check length
-        if len(clean_cid) < 10 or len(clean_cid) > 15:
-            return False, "CID must be 10-15 digits"
-        
-        # Mock blacklist check (in real system, check against actual blacklist)
-        blacklisted = ['15551234567', '18005551234']  # Mock bad numbers
-        if clean_cid in blacklisted:
-            return False, "This number is blacklisted"
-        
-        return True, "CID validated successfully"
-    
-    # =========================================================================
-    # Balance Management
-    # =========================================================================
-    
     async def get_balance(self, telegram_id: int) -> float:
-        """Get user's current balance"""
         user = await self.get_or_create_user(telegram_id)
         return user.get('balance', 0.0)
     
-    async def add_balance(self, telegram_id: int, amount: float) -> float:
-        """Add credits to user balance"""
-        user = await self.get_or_create_user(telegram_id)
-        user['balance'] += amount
-        logger.info(f"💰 Added ${amount:.2f} to user {telegram_id}. New balance: ${user['balance']:.2f}")
-        return user['balance']
-    
-    async def deduct_balance(self, telegram_id: int, amount: float) -> bool:
-        """Deduct credits from user balance"""
-        user = await self.get_or_create_user(telegram_id)
-        if user['balance'] >= amount:
-            user['balance'] -= amount
-            logger.info(f"💸 Deducted ${amount:.2f} from user {telegram_id}. Remaining: ${user['balance']:.2f}")
-            return True
-        return False
-    
-    # =========================================================================
-    # Call Logs - Detailed Results
-    # =========================================================================
-    
     async def get_campaign_call_logs(self, campaign_id: int, limit: int = 50) -> List[Dict]:
-        """Get detailed call logs for a campaign"""
-        # Mock detailed call logs
-        sample_logs = [
-            {
-                'phone_number': '+1234567890',
-                'status': 'pressed_one',
-                'answered': True,
-                'pressed_one': True,
-                'duration': 45,
-                'cost': 0.75,
-                'timestamp': datetime.now() - timedelta(minutes=5)
-            },
-            {
-                'phone_number': '+1234567891',
-                'status': 'answered',
-                'answered': True,
-                'pressed_one': False,
-                'duration': 30,
-                'cost': 0.50,
-                'timestamp': datetime.now() - timedelta(minutes=10)
-            },
-            {
-                'phone_number': '+1234567892',
-                'status': 'pressed_one',
-                'answered': True,
-                'pressed_one': True,
-                'duration': 52,
-                'cost': 0.87,
-                'timestamp': datetime.now() - timedelta(minutes=15)
-            },
-            {
-                'phone_number': '+1234567893',
-                'status': 'no_answer',
-                'answered': False,
-                'pressed_one': False,
-                'duration': 0,
-                'cost': 0.10,
-                'timestamp': datetime.now() - timedelta(minutes=18)
-            },
-            {
-                'phone_number': '+1234567894',
-                'status': 'pressed_one',
-                'answered': True,
-                'pressed_one': True,
-                'duration': 38,
-                'cost': 0.63,
-                'timestamp': datetime.now() - timedelta(minutes=22)
-            },
-            {
-                'phone_number': '+1234567895',
-                'status': 'failed',
-                'answered': False,
-                'pressed_one': False,
-                'duration': 0,
-                'cost': 0.05,
-                'timestamp': datetime.now() - timedelta(minutes=25)
-            },
-            {
-                'phone_number': '+1234567896',
-                'status': 'answered',
-                'answered': True,
-                'pressed_one': False,
-                'duration': 28,
-                'cost': 0.47,
-                'timestamp': datetime.now() - timedelta(minutes=28)
-            },
-            {
-                'phone_number': '+1234567897',
-                'status': 'pressed_one',
-                'answered': True,
-                'pressed_one': True,
-                'duration': 41,
-                'cost': 0.68,
-                'timestamp': datetime.now() - timedelta(minutes=30)
-            },
-            {
-                'phone_number': '+1234567898',
-                'status': 'no_answer',
-                'answered': False,
-                'pressed_one': False,
-                'duration': 0,
-                'cost': 0.10,
-                'timestamp': datetime.now() - timedelta(minutes=33)
-            },
-            {
-                'phone_number': '+1234567899',
-                'status': 'answered',
-                'answered': True,
-                'pressed_one': False,
-                'duration': 25,
-                'cost': 0.42,
-                'timestamp': datetime.now() - timedelta(minutes=35)
-            },
-        ]
-        
-        return sample_logs[:limit]
+        return [
+            {'phone_number': '+1234567890', 'status': 'pressed_one', 'answered': True, 'pressed_one': True, 'duration': 45, 'cost': 0.75, 'timestamp': datetime.now() - timedelta(minutes=5)},
+            {'phone_number': '+1234567891', 'status': 'answered', 'answered': True, 'pressed_one': False, 'duration': 30, 'cost': 0.50, 'timestamp': datetime.now() - timedelta(minutes=10)},
+            {'phone_number': '+1234567892', 'status': 'no_answer', 'answered': False, 'pressed_one': False, 'duration': 0, 'cost': 0.10, 'timestamp': datetime.now() - timedelta(minutes=15)},
+            {'phone_number': '+1234567893', 'status': 'failed', 'answered': False, 'pressed_one': False, 'duration': 0, 'cost': 0.05, 'timestamp': datetime.now() - timedelta(minutes=20)},
+        ][:limit]
 
 
 # Global mock database instance

@@ -1,10 +1,10 @@
 # =============================================================================
-# Campaign Worker - Async Call Processing Engine
+# Campaign Worker - Async Call Processing Engine (Per-User Trunk)
 # =============================================================================
-# This module manages campaign execution:
-# - Fetches pending campaigns from database
+# Manages campaign execution with per-user trunk routing:
+# - Fetches running campaigns from database
+# - Resolves user-specific PJSIP endpoints
 # - Processes call queue with rate limiting
-# - Orchestrates AMI client
 # - Monitors campaign progress
 # =============================================================================
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class CampaignWorker:
-    """Manages campaign execution and call processing"""
+    """Manages campaign execution with per-user trunk routing"""
     
     def __init__(self):
         self.ami_client = AsteriskAMIClient()
@@ -54,13 +54,6 @@ class CampaignWorker:
             logger.error("❌ Failed to connect to Asterisk AMI")
             return False
         
-        # Check trunk status
-        trunk_ok = await self.ami_client.check_trunk_status()
-        if trunk_ok:
-            logger.info("✅ MagnusBilling trunk is registered")
-        else:
-            logger.warning("⚠️ MagnusBilling trunk may not be registered")
-        
         self.running = True
         logger.info("✅ Campaign Worker started successfully")
         
@@ -74,35 +67,29 @@ class CampaignWorker:
         logger.info("🛑 Stopping Campaign Worker...")
         self.running = False
         
-        # Wait for active calls to complete
         while self.active_calls > 0:
             logger.info(f"Waiting for {self.active_calls} active calls to complete...")
             await asyncio.sleep(5)
         
-        # Disconnect AMI
         await self.ami_client.disconnect()
         
-        # Close database
         if self.db_pool:
             await self.db_pool.close()
         
         logger.info("✅ Campaign Worker stopped")
     
     async def processing_loop(self):
-        """Main processing loop - checks for campaigns and processes them"""
+        """Main processing loop"""
         while self.running:
             try:
-                # Fetch running campaigns
                 campaigns = await self.get_running_campaigns()
                 
                 if campaigns:
                     logger.info(f"📊 Found {len(campaigns)} running campaign(s)")
                     
-                    # Process each campaign
                     for campaign in campaigns:
                         await self.process_campaign(campaign)
                 
-                # Sleep before next check
                 await asyncio.sleep(5)
                 
             except Exception as e:
@@ -110,22 +97,42 @@ class CampaignWorker:
                 await asyncio.sleep(10)
     
     async def get_running_campaigns(self) -> List[Dict]:
-        """Fetch campaigns with status 'running' from database"""
+        """Fetch running campaigns with their user trunk info"""
         async with self.db_pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT id, user_id, name, caller_id, total_numbers, completed
-                FROM campaigns
-                WHERE status = 'running'
-                AND completed < total_numbers
-                ORDER BY created_at ASC
+                SELECT 
+                    c.id, c.user_id, c.name, c.caller_id, 
+                    c.total_numbers, c.completed,
+                    c.trunk_id, c.lead_id,
+                    ut.pjsip_endpoint_name as trunk_endpoint,
+                    ut.caller_id as trunk_caller_id,
+                    ut.max_channels as trunk_max_channels,
+                    ut.status as trunk_status
+                FROM campaigns c
+                LEFT JOIN user_trunks ut ON c.trunk_id = ut.id
+                WHERE c.status = 'running'
+                AND c.completed < c.total_numbers
+                ORDER BY c.created_at ASC
             """)
             
             return [dict(row) for row in rows]
     
     async def process_campaign(self, campaign: Dict):
-        """Process a single campaign - fetch and dial numbers"""
+        """Process a single campaign using its user-specific trunk"""
         campaign_id = campaign['id']
         user_id = campaign['user_id']
+        trunk_endpoint = campaign.get('trunk_endpoint')
+        
+        # Validate trunk is available
+        if not trunk_endpoint:
+            logger.warning(f"⚠️ Campaign {campaign_id}: No trunk assigned")
+            await self.pause_campaign(campaign_id, "No SIP trunk assigned")
+            return
+        
+        if campaign.get('trunk_status') != 'active':
+            logger.warning(f"⚠️ Campaign {campaign_id}: Trunk is not active")
+            await self.pause_campaign(campaign_id, "SIP trunk is not active")
+            return
         
         # Check user has sufficient credits
         credits = await self.get_user_credits(user_id)
@@ -134,27 +141,26 @@ class CampaignWorker:
             await self.pause_campaign(campaign_id, "Insufficient credits")
             return
         
-        # Fetch pending numbers for this campaign
+        # Fetch pending numbers
         numbers = await self.get_pending_numbers(campaign_id, limit=10)
         
         if not numbers:
-            # No more numbers - mark campaign as completed
             logger.info(f"✅ Campaign {campaign_id} completed")
             await self.complete_campaign(campaign_id)
             return
+        
+        # Determine CallerID: campaign override > trunk default > global default
+        caller_id = campaign.get('caller_id') or campaign.get('trunk_caller_id')
         
         # Process each number
         tasks = []
         for number_data in numbers:
             task = asyncio.create_task(
-                self.dial_number(campaign, number_data)
+                self.dial_number(campaign, number_data, trunk_endpoint, caller_id)
             )
             tasks.append(task)
-            
-            # Add delay between calls
             await asyncio.sleep(DELAY_BETWEEN_CALLS)
         
-        # Wait for all calls to be initiated
         await asyncio.gather(*tasks, return_exceptions=True)
     
     async def get_pending_numbers(self, campaign_id: int, limit: int = 10) -> List[Dict]:
@@ -171,24 +177,29 @@ class CampaignWorker:
             
             return [dict(row) for row in rows]
     
-    async def dial_number(self, campaign: Dict, number_data: Dict):
-        """Dial a single number"""
-        async with self.semaphore:  # Limit concurrent calls
+    async def dial_number(
+        self,
+        campaign: Dict,
+        number_data: Dict,
+        trunk_endpoint: str,
+        caller_id: Optional[str]
+    ):
+        """Dial a single number using the user's specific trunk"""
+        async with self.semaphore:
             campaign_id = campaign['id']
             campaign_data_id = number_data['id']
             phone_number = number_data['phone_number']
-            caller_id = campaign.get('caller_id') or None
             
             try:
                 self.active_calls += 1
-                logger.info(f"📞 Dialing {phone_number} for campaign {campaign_id}")
+                logger.info(f"📞 Dialing {phone_number} via {trunk_endpoint} for campaign {campaign_id}")
                 
-                # Update status to 'dialing'
                 await self.update_number_status(campaign_data_id, 'dialing')
                 
-                # Originate call via AMI
+                # Originate call via user's specific trunk
                 call_id = await self.ami_client.originate_call(
                     destination=phone_number,
+                    trunk_endpoint=trunk_endpoint,
                     caller_id=caller_id,
                     variables={
                         'CAMPAIGN_ID': str(campaign_id),
@@ -197,21 +208,17 @@ class CampaignWorker:
                 )
                 
                 if call_id:
-                    # Create call record in database
                     await self.create_call_record(
                         campaign_id=campaign_id,
                         campaign_data_id=campaign_data_id,
                         call_id=call_id,
                         phone_number=phone_number,
-                        caller_id=caller_id
+                        caller_id=caller_id,
+                        trunk_endpoint=trunk_endpoint
                     )
-                    
-                    # Update campaign_data with call_id
                     await self.update_number_call_id(campaign_data_id, call_id)
-                    
                     logger.info(f"✅ Call initiated: {phone_number} → {call_id}")
                 else:
-                    # Failed to originate
                     logger.error(f"❌ Failed to dial {phone_number}")
                     await self.update_number_status(campaign_data_id, 'failed')
                     
@@ -228,21 +235,22 @@ class CampaignWorker:
         campaign_data_id: int,
         call_id: str,
         phone_number: str,
-        caller_id: Optional[str]
+        caller_id: Optional[str],
+        trunk_endpoint: Optional[str] = None
     ):
         """Create initial call record in database"""
         async with self.db_pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO calls (
                     campaign_id, campaign_data_id, call_id,
-                    phone_number, caller_id, status, started_at
+                    phone_number, caller_id, trunk_endpoint,
+                    status, started_at
                 )
-                VALUES ($1, $2, $3, $4, $5, 'INITIATED', $6)
+                VALUES ($1, $2, $3, $4, $5, $6, 'INITIATED', $7)
             """, campaign_id, campaign_data_id, call_id,
-                phone_number, caller_id, datetime.now())
+                phone_number, caller_id, trunk_endpoint, datetime.now())
     
     async def update_number_status(self, campaign_data_id: int, status: str):
-        """Update campaign_data status"""
         async with self.db_pool.acquire() as conn:
             await conn.execute("""
                 UPDATE campaign_data
@@ -251,7 +259,6 @@ class CampaignWorker:
             """, status, datetime.now(), campaign_data_id)
     
     async def update_number_call_id(self, campaign_data_id: int, call_id: str):
-        """Update campaign_data with call_id"""
         async with self.db_pool.acquire() as conn:
             await conn.execute("""
                 UPDATE campaign_data
@@ -260,7 +267,6 @@ class CampaignWorker:
             """, call_id, campaign_data_id)
     
     async def get_user_credits(self, user_id: int) -> float:
-        """Get user's available credits"""
         async with self.db_pool.acquire() as conn:
             credits = await conn.fetchval("""
                 SELECT credits FROM users WHERE id = $1
@@ -268,25 +274,21 @@ class CampaignWorker:
             return float(credits or 0)
     
     async def pause_campaign(self, campaign_id: int, reason: str):
-        """Pause a campaign"""
         async with self.db_pool.acquire() as conn:
             await conn.execute("""
                 UPDATE campaigns
                 SET status = 'paused'
                 WHERE id = $1
             """, campaign_id)
-        
         logger.info(f"⏸️ Campaign {campaign_id} paused: {reason}")
     
     async def complete_campaign(self, campaign_id: int):
-        """Mark campaign as completed"""
         async with self.db_pool.acquire() as conn:
             await conn.execute("""
                 UPDATE campaigns
                 SET status = 'completed', completed_at = $1
                 WHERE id = $2
             """, datetime.now(), campaign_id)
-        
         logger.info(f"✅ Campaign {campaign_id} marked as completed")
 
 
@@ -294,7 +296,6 @@ class CampaignWorker:
 # Main Entry Point
 # =============================================================================
 async def main():
-    """Main function to run campaign worker"""
     worker = CampaignWorker()
     
     try:

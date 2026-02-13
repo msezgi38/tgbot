@@ -48,11 +48,15 @@ AMI_CONFIG = {
 }
 
 # =============================================================================
-# Asterisk Trunk Configuration
+# Asterisk Trunk Configuration (Dynamic Per-User)
 # =============================================================================
-TRUNK_NAME = "magnus_trunk"
-DEFAULT_CALLER_ID = "1234567890"         # ⚠️ UPDATE WITH VERIFIED NUMBER
 IVR_CONTEXT = "press-one-ivr"
+DEFAULT_CALLER_ID = "1234567890"         # Fallback CallerID if user has none
+
+# PJSIP Dynamic Config Generation
+PJSIP_CONFIG_DIR = "/etc/asterisk"                    # Asterisk config directory
+PJSIP_USERS_CONF = "pjsip_users.conf"                 # Generated per-user trunk configs
+ASTERISK_RELOAD_CMD = 'asterisk -rx "pjsip reload"'   # Command to reload PJSIP after changes
 
 # =============================================================================
 # Webhook Server Configuration

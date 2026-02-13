@@ -1,22 +1,23 @@
 # =============================================================================
-# Python Dialer - Asterisk AMI Client
+# Python Dialer - Asterisk AMI Client (Per-User Trunk Support)
 # =============================================================================
-# This module handles call origination through Asterisk Manager Interface (AMI)
+# Handles call origination through Asterisk Manager Interface (AMI)
 # Uses panoramisk for async AMI communication
+# Supports dynamic per-user PJSIP endpoints
 # =============================================================================
 
 import asyncio
 import logging
 from typing import Dict, Optional
 from panoramisk import Manager
-from config import AMI_CONFIG, TRUNK_NAME, IVR_CONTEXT, DEFAULT_CALLER_ID
+from config import AMI_CONFIG, IVR_CONTEXT, DEFAULT_CALLER_ID
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class AsteriskAMIClient:
-    """Asterisk Manager Interface client for call origination"""
+    """Asterisk Manager Interface client for call origination (per-user trunk)"""
     
     def __init__(self):
         self.manager: Optional[Manager] = None
@@ -30,7 +31,7 @@ class AsteriskAMIClient:
                 port=AMI_CONFIG['port'],
                 username=AMI_CONFIG['username'],
                 secret=AMI_CONFIG['secret'],
-                ping_delay=10,  # Send keepalive every 10 seconds
+                ping_delay=10,
                 ping_tries=3
             )
             
@@ -59,14 +60,16 @@ class AsteriskAMIClient:
     async def originate_call(
         self,
         destination: str,
+        trunk_endpoint: str,
         caller_id: Optional[str] = None,
         variables: Optional[Dict] = None
     ) -> Optional[str]:
         """
-        Originate a call through MagnusBilling trunk
+        Originate a call through a user's specific PJSIP trunk
         
         Args:
             destination: Phone number to call
+            trunk_endpoint: Per-user PJSIP endpoint name (e.g. user_5_trunk_1)
             caller_id: CallerID to display (optional)
             variables: Channel variables to set (optional)
             
@@ -78,13 +81,11 @@ class AsteriskAMIClient:
             return None
         
         try:
-            # Build channel string for MagnusBilling trunk
-            channel = f"PJSIP/{destination}@{TRUNK_NAME}"
+            # Build channel string using user's specific trunk endpoint
+            channel = f"PJSIP/{destination}@{trunk_endpoint}"
             
-            # Use provided CallerID or default
             cid = caller_id or DEFAULT_CALLER_ID
             
-            # Prepare originate action
             action_params = {
                 'Action': 'Originate',
                 'Channel': channel,
@@ -92,23 +93,21 @@ class AsteriskAMIClient:
                 'Exten': destination,
                 'Priority': '1',
                 'CallerID': cid,
-                'Timeout': '30000',  # 30 seconds
-                'Async': 'true',     # Don't wait for answer
+                'Timeout': '30000',
+                'Async': 'true',
             }
             
-            # Add custom variables if provided
+            # Add custom variables
             if variables:
                 var_list = [f"{k}={v}" for k, v in variables.items()]
                 action_params['Variable'] = ','.join(var_list)
             
-            logger.info(f"📞 Originating call to {destination} via {TRUNK_NAME}")
+            logger.info(f"📞 Originating call to {destination} via {trunk_endpoint}")
             logger.debug(f"Channel: {channel}, CallerID: {cid}")
             
-            # Send originate action
             response = await self.manager.send_action(action_params)
             
             if response.success:
-                # Extract unique ID from response
                 call_id = response.headers.get('UniqueID', '')
                 logger.info(f"✅ Call originated successfully - ID: {call_id}")
                 return call_id
@@ -141,17 +140,13 @@ class AsteriskAMIClient:
             response = await self.manager.send_action({
                 'Action': 'CoreShowChannels'
             })
-            
-            # Parse response to count active channels
-            # This is a simplified version - you may need to adjust
             return int(response.headers.get('ListItems', '0'))
-            
         except Exception as e:
             logger.error(f"Error getting active channels: {e}")
             return 0
     
-    async def check_trunk_status(self) -> bool:
-        """Check if MagnusBilling trunk is registered"""
+    async def check_trunk_status(self, endpoint_name: Optional[str] = None) -> bool:
+        """Check if a specific PJSIP trunk is registered"""
         if not self.connected:
             return False
         
@@ -160,12 +155,28 @@ class AsteriskAMIClient:
                 'Action': 'PJSIPShowRegistrations'
             })
             
-            # Check if our trunk is in the response
-            # This is simplified - actual parsing would be more complex
-            return TRUNK_NAME in str(response)
+            if endpoint_name:
+                return endpoint_name in str(response)
+            return True
             
         except Exception as e:
             logger.error(f"Error checking trunk status: {e}")
+            return False
+    
+    async def reload_pjsip(self) -> bool:
+        """Reload PJSIP module after config changes"""
+        if not self.connected:
+            return False
+        
+        try:
+            response = await self.manager.send_action({
+                'Action': 'Command',
+                'Command': 'pjsip reload'
+            })
+            logger.info("🔄 PJSIP reloaded")
+            return True
+        except Exception as e:
+            logger.error(f"Error reloading PJSIP: {e}")
             return False
 
 
@@ -173,22 +184,18 @@ class AsteriskAMIClient:
 # Usage Example
 # =============================================================================
 async def main():
-    """Example usage of AMI client"""
+    """Example usage of AMI client with per-user trunk"""
     client = AsteriskAMIClient()
     
-    # Connect to AMI
     connected = await client.connect()
     if not connected:
         print("Failed to connect to Asterisk")
         return
     
-    # Check trunk status
-    trunk_ok = await client.check_trunk_status()
-    print(f"Trunk status: {'✅ Registered' if trunk_ok else '❌ Not registered'}")
-    
-    # Originate a test call
+    # Originate a test call through a user-specific trunk
     call_id = await client.originate_call(
         destination="1234567890",
+        trunk_endpoint="user_5_trunk_1",  # Per-user trunk endpoint
         caller_id="9876543210",
         variables={
             "CAMPAIGN_ID": "123",
@@ -199,10 +206,7 @@ async def main():
     if call_id:
         print(f"Call originated with ID: {call_id}")
     
-    # Keep connection open to receive events
     await asyncio.sleep(60)
-    
-    # Disconnect
     await client.disconnect()
 
 

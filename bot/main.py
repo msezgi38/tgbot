@@ -1,7 +1,7 @@
 # =============================================================================
-# Telegram Bot - Main Application
+# Telegram Bot - Main Application (User-Scoped PJSIP)
 # =============================================================================
-# Press-1 IVR Bot - Campaign management via Telegram
+# Press-1 IVR Bot - Per-user trunk, lead, and campaign management
 # =============================================================================
 
 import logging
@@ -38,36 +38,33 @@ logger = logging.getLogger(__name__)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command - Show professional dashboard"""
     user = update.effective_user
+    user_data = await db.get_or_create_user(user.id, user.username, user.first_name, user.last_name)
     
-    # Get or create user in database
-    user_data = await db.get_or_create_user(
-        user.id,
-        user.username,
-        user.first_name,
-        user.last_name
-    )
+    stats = await db.get_user_stats(user.id)
     
-    # Build professional dashboard message
     dashboard_text = f"""
 <b>1337 Press One</b>
 
-Hello 1337 P1 150$/1k lines, welcome to the advanced press-one system.
+Hello {user.first_name or 'User'}, welcome to the advanced press-one system.
 
 <b>Your Settings</b>
 Country Code: {user_data.get('country_code', '+1')} | Caller ID: {user_data.get('caller_id', 'Not Set')}
 
 <b>Account & System Info</b>
-Balance: ${user_data.get('balance', 0):.2f} | Available Lines: {user_data.get('available_lines', 0)}
-Lines Used: {user_data.get('lines_used', 0)} | System: {user_data.get('system_status', 'Ready')}
+Balance: ${user_data.get('credits', 0):.2f} | Trunks: {stats.get('trunk_count', 0)} | Leads: {stats.get('lead_count', 0)}
+Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total_calls', 0)}
 
 Ready to launch your campaign?
 """
     
-    # Create 6-button main menu (2x3 grid + bottom row)
     keyboard = [
         [
             InlineKeyboardButton("🚀 Launch Campaign", callback_data="menu_launch"),
             InlineKeyboardButton("💰 Check Balance", callback_data="menu_balance")
+        ],
+        [
+            InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks"),
+            InlineKeyboardButton("📋 My Leads", callback_data="menu_leads")
         ],
         [
             InlineKeyboardButton("🔧 Configure CID", callback_data="menu_configure_cid"),
@@ -78,7 +75,6 @@ Ready to launch your campaign?
             InlineKeyboardButton("🔑 Account Info", callback_data="menu_account")
         ],
         [
-            InlineKeyboardButton("⚙️ Admin Panel", callback_data="menu_admin"),
             InlineKeyboardButton("💬 Contact Support", callback_data="menu_support")
         ]
     ]
@@ -92,313 +88,106 @@ Ready to launch your campaign?
 
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /balance command with visual indicators"""
+    """Handle /balance command"""
     user = update.effective_user
-    
-    # Get user stats
     stats = await db.get_user_stats(user.id)
     
     if not stats:
-        await update.message.reply_text("❌ User not found. Use /start first.")
+        await update.message.reply_text("❌ Use /start first.")
         return
     
     credits = stats['credits']
-    
-    # Credit status indicator
-    if credits > 100:
-        credit_status = "🟢 Excellent"
-    elif credits > 50:
-        credit_status = "🟡 Good"
-    elif credits > 10:
-        credit_status = "🟠 Low"
-    else:
-        credit_status = "🔴 Critical"
+    if credits > 100: credit_status = "🟢 Excellent"
+    elif credits > 50: credit_status = "🟡 Good"
+    elif credits > 10: credit_status = "🟠 Low"
+    else: credit_status = "🔴 Critical"
     
     balance_text = f"""
-💰 **Your Account Balance**
-{ui.SEPARATOR_HEAVY}
+💰 <b>Account Balance</b>
 
-**Status:** {credit_status}
-**Available Credits:** {credits:.2f}
+<b>Status:</b> {credit_status}
+<b>Available Credits:</b> {credits:.2f}
 
-{ui.SEPARATOR_LIGHT}
-
-**Account Statistics:**
+<b>Account Statistics:</b>
 💵 Total Spent: ${stats['total_spent']:.2f}
 📞 Total Calls: {stats['total_calls']}
 📊 Campaigns: {stats['campaign_count']}
+🔌 SIP Trunks: {stats.get('trunk_count', 0)}
+📋 Lead Lists: {stats.get('lead_count', 0)}
 
-{ui.SEPARATOR_LIGHT}
-
-💡 **Pricing:** 1 credit ≈ 1 minute of calling
+💡 1 credit ≈ 1 minute of calling
 """
     
     keyboard = [
-        [InlineKeyboardButton("💳 Buy More Credits", callback_data="menu_buy")],
+        [InlineKeyboardButton("💳 Buy Credits", callback_data="menu_buy")],
         [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        balance_text,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
+    await update.message.reply_text(balance_text, parse_mode='HTML', reply_markup=reply_markup)
 
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /buy command with modern package cards"""
-    
+    """Handle /buy command"""
+    buy_text = "💳 <b>Purchase Credits</b>\n\n"
     keyboard = []
-    package_items = list(CREDIT_PACKAGES.items())
     
-    for i, (package_id, package_data) in enumerate(package_items):
-        credits = package_data['credits']
-        price = package_data['price']
-        currency = package_data['currency']
-        
-        # Calculate savings for higher packages
-        savings = None
-        if i > 0:
-            base_package = package_items[0][1]
-            base_rate = base_package['price'] / base_package['credits']
-            current_rate = price / credits
-            savings = ((base_rate - current_rate) / base_rate) * 100
-        
-        # Create package card text
-        package_card = ui.package_card(credits, price, currency, savings)
-        
-        keyboard.append([
-            InlineKeyboardButton(
-                f"Select {credits} Credits",
-                callback_data=f"buy_{package_id}"
-            )
-        ])
+    for package_id, pkg in CREDIT_PACKAGES.items():
+        buy_text += f"📦 {pkg['credits']} Credits — ${pkg['price']} {pkg['currency']}\n"
+        keyboard.append([InlineKeyboardButton(
+            f"Select {pkg['credits']} Credits",
+            callback_data=f"buy_{package_id}"
+        )])
     
-    buy_text = f"""
-💳 **Purchase Credits**
-{ui.SEPARATOR_HEAVY}
-
-**Available Packages:**
-
-"""
-    
-    # Add package descriptions
-    for package_id, package_data in CREDIT_PACKAGES.items():
-        credits = package_data['credits']
-        price = package_data['price']
-        currency = package_data['currency']
-        buy_text += ui.package_card(credits, price, currency) + "\n\n"
-    
-    buy_text += f"""
-{ui.SEPARATOR_LIGHT}
-
-**Payment Options:**
-✅ Cryptocurrency (USDT, BTC, ETH)
-✅ Instant delivery
-✅ Secure via Oxapay
-✅ No hidden fees
-
-👇 Select a package below:
-"""
+    buy_text += "\n✅ Secure payments via Oxapay\n✅ Instant delivery"
     
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_main")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        buy_text,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
-
-
-async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle buy package callback"""
-    query = update.callback_query
-    await query.answer()
-    
-    # Extract package ID
-    package_id = query.data.split('_')[1]
-    package = oxapay.get_credit_package(package_id)
-    
-    if not package:
-        await query.edit_message_text("❌ Invalid package")
-        return
-    
-    user = update.effective_user
-    
-    # Get user from database
-    user_data = await db.get_or_create_user(
-        telegram_id=user.id,
-        username=user.username,
-        first_name=user.first_name
-    )
-    
-    # Create payment
-    payment_result = await oxapay.create_payment(
-        amount=package['price'],
-        currency=package['currency'],
-        description=f"{package['credits']} credits for IVR Bot"
-    )
-    
-    if not payment_result['success']:
-        await query.edit_message_text(
-            f"❌ Payment creation failed: {payment_result['error']}"
-        )
-        return
-    
-    # Save payment to database
-    await db.create_payment(
-        user_id=user_data['id'],
-        track_id=payment_result['track_id'],
-        amount=package['price'],
-        credits=package['credits'],
-        currency=package['currency'],
-        payment_url=payment_result['payment_url']
-    )
-    
-    # Send payment link
-    payment_text = f"""
-✅ **Payment Created!**
-
-**Package:** {package['credits']} credits
-**Amount:** ${package['price']} {package['currency']}
-**Track ID:** `{payment_result['track_id']}`
-
-**Payment Link:**
-{payment_result['payment_url']}
-
-Click the link above to complete payment.
-Credits will be added automatically after confirmation.
-
-⏱️ Payment expires in 30 minutes.
-"""
-    
-    keyboard = [[
-        InlineKeyboardButton("💳 Pay Now", url=payment_result['payment_url'])
-    ]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        payment_text,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
+    await update.message.reply_text(buy_text, parse_mode='HTML', reply_markup=reply_markup)
 
 
 async def new_campaign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /new_campaign command"""
-    # Initialize campaign creation flow
     context.user_data['creating_campaign'] = True
     context.user_data['campaign_step'] = 'name'
     
-    sent_msg = await update.message.reply_text(
-        """
-📝 <b>Create New Campaign</b>
-
-Step 1: What would you like to name this campaign?
-
-Example: Product Launch 2026
-""",
+    await update.message.reply_text(
+        "📝 <b>Create New Campaign</b>\n\nStep 1: Enter campaign name\n\nExample: Product Launch 2026",
         parse_mode='HTML'
     )
-    
-    # Store message ID for cleanup
-    context.user_data['last_bot_message'] = sent_msg.message_id
 
 
 async def campaigns_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /campaigns command with modern campaign cards"""
+    """Handle /campaigns command"""
     user = update.effective_user
-    
-    # Get user from database
     user_data = await db.get_or_create_user(user.id)
-    
-    # Get campaigns
     campaigns = await db.get_user_campaigns(user_data['id'], limit=10)
     
     if not campaigns:
-        empty_text = f"""
-📂 **No Campaigns Yet**
-{ui.SEPARATOR_LIGHT}
-
-You haven't created any campaigns yet.
-
-Ready to start? Create your first campaign now! 🚀
-"""
-        keyboard = [
-            [InlineKeyboardButton("📝 Create Campaign", callback_data="menu_new_campaign")],
-            [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await update.message.reply_text(
-            empty_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
+            "📂 <b>No Campaigns</b>\n\nYou haven't created any campaigns yet.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 Launch Campaign", callback_data="menu_launch")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
         )
         return
     
-    # Build modern campaign list with cards
-    campaigns_text = f"""
-📊 **Your Campaigns**
-{ui.SEPARATOR_HEAVY}
-
-Showing {len(campaigns)} most recent campaigns:
-
-"""
-    
+    text = "📊 <b>My Campaigns</b>\n\n"
     keyboard = []
     for camp in campaigns:
-        # Add campaign card
-        campaigns_text += ui.campaign_card(camp) + "\n\n"
-        
-        # Add action buttons for each campaign
-        campaign_id = camp['id']
-        status = camp['status']
-        
-        if status == 'running':
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"⏸️ Pause '{camp['name'][:20]}'",
-                    callback_data=f"pause_{campaign_id}"
-                ),
-                InlineKeyboardButton(
-                    "📊 Details",
-                    callback_data=f"details_{campaign_id}"
-                )
-            ])
-        elif status == 'paused':
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"▶️ Resume '{camp['name'][:20]}'",
-                    callback_data=f"resume_{campaign_id}"
-                ),
-                InlineKeyboardButton(
-                    "📊 Details",
-                    callback_data=f"details_{campaign_id}"
-                )
-            ])
-        else:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"📊 View '{camp['name'][:20]}'",
-                    callback_data=f"details_{campaign_id}"
-                )
-            ])
+        status_emoji = {'running': '🟢', 'paused': '🟡', 'completed': '✅', 'failed': '❌'}.get(camp.get('status', ''), '⚪')
+        trunk = camp.get('trunk_name', 'No Trunk')
+        lead = camp.get('lead_name', 'Direct Upload')
+        text += f"{status_emoji} <b>{camp['name']}</b>\n   📞 {camp.get('completed', 0)}/{camp.get('total_numbers', 0)} | 🔌 {trunk}\n\n"
+        keyboard.append([InlineKeyboardButton(f"📊 {camp['name'][:25]}", callback_data=f"details_{camp['id']}")])
     
-    # Add bottom buttons
-    keyboard.append([
-        InlineKeyboardButton("🔄 Refresh", callback_data="menu_campaigns"),
-        InlineKeyboardButton("🔙 Menu", callback_data="menu_main")
-    ])
-    
+    keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        campaigns_text,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
+    
+    await update.message.reply_text(text, parse_mode='HTML', reply_markup=reply_markup)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -407,174 +196,237 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ❓ <b>Help & Support</b>
 
 <b>Commands:</b>
-/start - Start the bot
-/balance - Check your credits
+/start - Main dashboard
+/balance - Check credits
 /buy - Purchase credits
-/new_campaign - Create new campaign
-/campaigns - View all campaigns
-/help - Show this help
+/new_campaign - Create campaign
+/campaigns - View campaigns
+/help - This help
 
-<b>Campaign Creation:</b>
-1. Use /new_campaign
-2. Give it a name
-3. Upload CSV file with phone numbers
-4. Start the campaign
+<b>Campaign Creation Flow:</b>
+1. 🚀 Launch Campaign
+2. Enter campaign name
+3. Select IVR voice file
+4. Select SIP trunk
+5. Select lead list
+6. Start campaign!
 
-<b>CSV Format:</b>
-Your CSV should have phone numbers in the first column:
-
-1234567890
-9876543210
-5555555555
-
-<b>Pricing:</b>
-• 1 credit ≈ 1 minute of calling
-• Minimum 6 seconds billing
-• 6-second increments
-
-<b>Support:</b>
-If you need help, contact: @your_support_username
-
-<b>Technical Info:</b>
-• Powered by Asterisk PBX
-• MagnusBilling trunk provider
-• Oxapay payment processing
+<b>Key Features:</b>
+• 🔌 Per-user SIP trunks (add your own)
+• 📋 Reusable lead lists
+• 🔧 Custom Caller ID
+• 📊 Real-time campaign statistics
 """
     
     await update.message.reply_text(
         help_text,
-        parse_mode='HTML'
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+        ])
     )
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages during campaign creation"""
+# =============================================================================
+# Buy Callback
+# =============================================================================
+
+async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle buy package callback"""
+    query = update.callback_query
+    await query.answer()
     
+    package_id = query.data.replace("buy_", "")
+    
+    if package_id not in CREDIT_PACKAGES:
+        await query.edit_message_text("❌ Invalid package.")
+        return
+    
+    package = CREDIT_PACKAGES[package_id]
+    user = update.effective_user
+    user_data = await db.get_or_create_user(user.id)
+    
+    try:
+        payment = await oxapay.create_payment(
+            amount=package['price'],
+            currency=package['currency'],
+            order_id=f"user_{user_data['id']}_{package_id}",
+            description=f"{package['credits']} credits for {user.username or user.id}"
+        )
+        
+        if payment and payment.get('trackId'):
+            await db.create_payment(
+                user_id=user_data['id'],
+                track_id=payment['trackId'],
+                amount=package['price'],
+                credits=package['credits'],
+                currency=package['currency'],
+                payment_url=payment.get('payLink', '')
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("💳 Pay Now", url=payment.get('payLink', ''))],
+                [InlineKeyboardButton("🔙 Back", callback_data="menu_main")]
+            ]
+            
+            await query.edit_message_text(
+                f"💳 <b>Payment Created</b>\n\n"
+                f"Package: {package['credits']} Credits\n"
+                f"Amount: ${package['price']} {package['currency']}\n\n"
+                f"Click 'Pay Now' to complete your payment.",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await query.edit_message_text("❌ Payment creation failed. Try again later.")
+    except Exception as e:
+        logger.error(f"Payment error: {e}")
+        await query.edit_message_text(f"❌ Error: {e}")
+
+
+# =============================================================================
+# Message Handler (Campaign creation + Trunk/Lead input)
+# =============================================================================
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text messages during campaign creation and trunk/lead setup"""
     user = update.effective_user
     
-    # Handle custom CID input
+    # --- Handle custom CID input ---
     if context.user_data.get('awaiting_custom_cid'):
         cid = update.message.text.strip()
-        
-        # Validate CID
         is_valid, message = await db.validate_cid(cid)
         
         if is_valid:
-            # Clean CID and set it
             clean_cid = ''.join(filter(str.isdigit, cid))
             await db.set_caller_id(user.id, clean_cid)
-            
-            # Clear awaiting flag
             context.user_data['awaiting_custom_cid'] = False
-            
             await update.message.reply_text(
-                f"""
-✅ <b>CID Set Successfully</b>
-
-Your Caller ID has been set to: {clean_cid}
-
-This CID will be used for all your campaigns.
-""",
+                f"✅ <b>CID Set:</b> {clean_cid}",
                 parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")
-                ]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]])
             )
         else:
+            await update.message.reply_text(f"❌ {message}\n\nTry again or /cancel.", parse_mode='HTML')
+        return
+    
+    # --- Handle SIP trunk creation input ---
+    if context.user_data.get('awaiting_trunk_input'):
+        step = context.user_data.get('trunk_step', 'name')
+        text = update.message.text.strip()
+        
+        if step == 'name':
+            context.user_data['trunk_name'] = text
+            context.user_data['trunk_step'] = 'host'
+            await update.message.reply_text("🔌 <b>SIP Host</b>\n\nEnter the SIP server hostname/IP:\n\nExample: sip.provider.com", parse_mode='HTML')
+        
+        elif step == 'host':
+            context.user_data['trunk_host'] = text
+            context.user_data['trunk_step'] = 'username'
+            await update.message.reply_text("🔌 <b>SIP Username</b>\n\nEnter SIP authentication username:", parse_mode='HTML')
+        
+        elif step == 'username':
+            context.user_data['trunk_username'] = text
+            context.user_data['trunk_step'] = 'password'
+            await update.message.reply_text("🔌 <b>SIP Password</b>\n\nEnter SIP authentication password:", parse_mode='HTML')
+        
+        elif step == 'password':
+            # All trunk info collected, create trunk
+            user_data = await db.get_or_create_user(user.id)
+            trunk = await db.create_trunk(
+                user_id=user_data['id'],
+                name=context.user_data.get('trunk_name', 'My Trunk'),
+                sip_host=context.user_data.get('trunk_host', ''),
+                sip_username=context.user_data.get('trunk_username', ''),
+                sip_password=text,
+            )
+            
+            # Clear state
+            context.user_data['awaiting_trunk_input'] = False
+            context.user_data.pop('trunk_step', None)
+            context.user_data.pop('trunk_name', None)
+            context.user_data.pop('trunk_host', None)
+            context.user_data.pop('trunk_username', None)
+            
             await update.message.reply_text(
-                f"""
-❌ <b>CID Validation Failed</b>
-
-{message}
-
-Please try again or /cancel.
-""",
-                parse_mode='HTML'
+                f"✅ <b>Trunk Created!</b>\n\n"
+                f"📛 Name: {trunk['name']}\n"
+                f"🌐 Host: {trunk['sip_host']}\n"
+                f"👤 User: {trunk['sip_username']}\n"
+                f"🔗 Endpoint: <code>{trunk['pjsip_endpoint_name']}</code>\n\n"
+                f"⚠️ Trunk will be active after Asterisk reload.",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                ])
             )
         return
     
+    # --- Handle lead list name input ---
+    if context.user_data.get('awaiting_lead_name'):
+        user_data = await db.get_or_create_user(user.id)
+        lead_name = update.message.text.strip()
+        
+        lead_id = await db.create_lead_list(
+            user_id=user_data['id'],
+            list_name=lead_name
+        )
+        
+        context.user_data['awaiting_lead_name'] = False
+        context.user_data['current_lead_id'] = lead_id
+        context.user_data['awaiting_lead_file'] = True
+        
+        await update.message.reply_text(
+            f"✅ <b>Lead List Created:</b> {lead_name}\n\n"
+            f"📂 Now upload a CSV or TXT file with phone numbers (one per line).",
+            parse_mode='HTML'
+        )
+        return
+    
+    # --- Handle campaign creation steps ---
     if not context.user_data.get('creating_campaign'):
         return
     
     step = context.user_data.get('campaign_step')
     
     if step == 'name':
-        # Save campaign name
-        campaign_name = update.message.text
-        
-        # Get user from database
+        campaign_name = update.message.text.strip()
         user_data = await db.get_or_create_user(user.id)
         
-        # Create campaign
-        campaign_id = await db.create_campaign(
-            user_id=user_data['id'],
-            name=campaign_name
-        )
-        
-        context.user_data['campaign_id'] = campaign_id
+        # Campaign will be created later when trunk + lead are selected
         context.user_data['campaign_name'] = campaign_name
         context.user_data['campaign_step'] = 'voice_choice'
-        
-        # Delete the name question message if stored
-        if 'last_bot_message' in context.user_data:
-            try:
-                await context.bot.delete_message(
-                    chat_id=update.effective_chat.id,
-                    message_id=context.user_data['last_bot_message']
-                )
-            except:
-                pass
         
         # Get saved voice files
         saved_voices = await db.get_user_voice_files(user_data['id'])
         
-        # Show voice selection options
         keyboard = []
-        
         if saved_voices:
-            # Add saved voice files
-            for voice in saved_voices[:5]:  # Show max 5
+            for voice in saved_voices[:5]:
                 keyboard.append([InlineKeyboardButton(
-                    f"🎤 {voice['name']} ({voice['duration']}s)",
+                    f"🎤 {voice['name']} ({voice.get('duration', 0)}s)",
                     callback_data=f"voice_select_{voice['id']}"
                 )])
         
-        # Add upload new option
-        keyboard.append([InlineKeyboardButton(
-            "📤 Upload New Voice File",
-            callback_data="voice_upload_new"
-        )])
+        keyboard.append([InlineKeyboardButton("📤 Upload New Voice", callback_data="voice_upload_new")])
         
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        sent_msg = await update.message.reply_text(
-            f"""
-✅ <b>Campaign Created!</b>
-
-Name: {campaign_name}
-
-Step 2: Select or Upload IVR Audio
-
-<b>Choose an option:</b>
-• Select from your saved voice files
-• Or upload a new one
-
-""",
+        await update.message.reply_text(
+            f"✅ Name: <b>{campaign_name}</b>\n\n"
+            f"Step 2: Select or Upload IVR Audio",
             parse_mode='HTML',
-            reply_markup=reply_markup
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        
-        # Store this message to potentially delete later
-        context.user_data['last_bot_message'] = sent_msg.message_id
 
 
-
+# =============================================================================
+# Voice/Audio Handler
+# =============================================================================
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle voice/audio file upload for IVR"""
-    
+    """Handle voice/audio file upload"""
     if not context.user_data.get('creating_campaign'):
-        await update.message.reply_text("Please use /new_campaign first")
+        await update.message.reply_text("Use /new_campaign first")
         return
     
     if context.user_data.get('campaign_step') != 'voice_upload':
@@ -582,172 +434,296 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user = update.effective_user
     
-    # Get voice file info
     if update.message.voice:
         file = update.message.voice
-        file_type = "voice message"
         duration = file.duration or 30
     elif update.message.audio:
         file = update.message.audio
-        file_type = "audio file"
         duration = file.duration or 30
     else:
         return
     
-    # Save the voice file to database
     user_data = await db.get_or_create_user(user.id)
-    campaign_name = context.user_data.get('campaign_name', 'Voice')
-    voice_name = f"{campaign_name} - Voice"
-    
+    voice_name = f"{context.user_data.get('campaign_name', 'Voice')} - IVR"
     voice_id = await db.save_voice_file(user_data['id'], voice_name, duration)
     
-    # Move to next step
-    context.user_data['campaign_step'] = 'upload'
     context.user_data['voice_id'] = voice_id
+    context.user_data['campaign_step'] = 'select_trunk'
     
-    # Send single consolidated message
+    # Show trunk selection
+    trunks = await db.get_user_trunks(user_data['id'])
+    
+    keyboard = []
+    if trunks:
+        for trunk in trunks:
+            status = "🟢" if trunk['status'] == 'active' else "🔴"
+            keyboard.append([InlineKeyboardButton(
+                f"{status} {trunk['name']} ({trunk['sip_host']})",
+                callback_data=f"camp_trunk_{trunk['id']}"
+            )])
+    else:
+        keyboard.append([InlineKeyboardButton("➕ Add SIP Trunk First", callback_data="trunk_add")])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="menu_main")])
+    
     await update.message.reply_text(
-        f"""
-✅ <b>Voice File Saved!</b>
-
-📝 {voice_name} ({duration}s)
-
-━━━━━━━━━━━━━━━━━━━━━━
-
-📂 <b>Step 3: Upload Phone Numbers</b>
-
-Send a CSV or TXT file with phone numbers (one per line)
-
-Example:
-1234567890
-9876543210
-""",
-        parse_mode='HTML'
+        f"✅ Voice Saved: {voice_name} ({duration}s)\n\n"
+        f"Step 3: Select SIP Trunk\n\n"
+        f"Choose which trunk to use for this campaign:",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
+# =============================================================================
+# File Upload Handler (CSV/TXT for leads)
+# =============================================================================
+
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle CSV/TXT file upload"""
-    
-    if not context.user_data.get('creating_campaign'):
-        await update.message.reply_text("Please use /new_campaign first")
-        return
-    
-    if context.user_data.get('campaign_step') != 'upload':
-        return
-    
+    """Handle CSV/TXT file upload for leads or direct campaign upload"""
     user = update.effective_user
-    file = await update.message.document.get_file()
     
-    # Check file extension
     filename = update.message.document.file_name.lower()
     if not (filename.endswith('.csv') or filename.endswith('.txt')):
-        await update.message.reply_text(
-            "❌ Please upload a CSV or TXT file\n\nSupported formats: .csv, .txt"
-        )
+        await update.message.reply_text("❌ Please upload a CSV or TXT file")
         return
     
-    # Download file
+    file = await update.message.document.get_file()
     file_content = await file.download_as_bytearray()
     
-    # Parse file
     try:
         text_content = file_content.decode('utf-8')
         phone_numbers = []
         
         if filename.endswith('.csv'):
-            # Parse CSV
             reader = csv.reader(io.StringIO(text_content))
             for row in reader:
                 if row and row[0].strip():
-                    # Clean phone number
                     phone = ''.join(filter(str.isdigit, row[0]))
                     if phone:
                         phone_numbers.append(phone)
-        else:  # TXT file
-            # Parse TXT - each line is a phone number
-            lines = text_content.strip().split('\n')
-            for line in lines:
+        else:
+            for line in text_content.strip().split('\n'):
                 line = line.strip()
                 if line:
-                    # Clean phone number
                     phone = ''.join(filter(str.isdigit, line))
                     if phone:
                         phone_numbers.append(phone)
         
         if not phone_numbers:
-            await update.message.reply_text("❌ No valid phone numbers found in file")
+            await update.message.reply_text("❌ No valid phone numbers found")
             return
         
-        # Add to campaign
-        campaign_id = context.user_data['campaign_id']
-        count = await db.add_campaign_numbers(campaign_id, phone_numbers)
+        # Check if uploading to a lead list
+        if context.user_data.get('awaiting_lead_file'):
+            lead_id = context.user_data.get('current_lead_id')
+            if lead_id:
+                count = await db.add_lead_numbers(lead_id, phone_numbers)
+                context.user_data['awaiting_lead_file'] = False
+                context.user_data.pop('current_lead_id', None)
+                
+                await update.message.reply_text(
+                    f"✅ <b>{count} numbers added to lead list!</b>",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📋 My Leads", callback_data="menu_leads")],
+                        [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                    ])
+                )
+            return
         
-        # Clear creation state
-        context.user_data['creating_campaign'] = False
+        # Check if uploading directly for a campaign (legacy path)
+        if context.user_data.get('creating_campaign') and context.user_data.get('campaign_step') == 'upload':
+            campaign_id = context.user_data.get('campaign_id')
+            if campaign_id:
+                count = await db.add_campaign_numbers(campaign_id, phone_numbers)
+                context.user_data['creating_campaign'] = False
+                
+                await update.message.reply_text(
+                    f"✅ <b>Campaign Ready!</b>\n\n"
+                    f"📊 Numbers: {count}\n"
+                    f"💰 Est. cost: ~${count * 1.0:.2f}",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🚀 Start Campaign", callback_data=f"start_campaign_{campaign_id}")
+                    ]])
+                )
+            return
         
-        # Show campaign ready message
-        keyboard = [[
-            InlineKeyboardButton(
-                "🚀 Start Campaign",
-                callback_data=f"start_campaign_{campaign_id}"
-            )
-        ]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
+        # Default: ask to create a lead list
         await update.message.reply_text(
-            f"""
-✅ <b>Campaign Ready!</b>
-
-📊 <b>Numbers uploaded:</b> {count}
-💰 <b>Estimated cost:</b> ~${count * 1.0:.2f}
-
-Your campaign is ready to launch!
-Click the button below to start calling.
-""",
+            f"📂 Found {len(phone_numbers)} numbers.\n\nUse <b>📋 My Leads</b> to create a lead list first, then upload.",
             parse_mode='HTML',
-            reply_markup=reply_markup
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 My Leads", callback_data="menu_leads")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
         )
         
     except Exception as e:
-        logger.error(f"Error processing file: {e}")
-        await update.message.reply_text(
-            f"❌ Error processing file: {str(e)}\n\nPlease make sure it's a valid CSV or TXT file."
-        )
+        logger.error(f"File processing error: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
 
+
+# =============================================================================
+# Start Campaign Callback
+# =============================================================================
 
 async def handle_start_campaign(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle start campaign callback"""
     query = update.callback_query
     await query.answer()
     
-    # Extract campaign ID
     campaign_id = int(query.data.split('_')[2])
-    
-    # Start campaign
     await db.start_campaign(campaign_id)
     
     await query.edit_message_text(
-        f"""
-🚀 **Campaign Started!**
-{ui.SEPARATOR_MEDIUM}
-
-Campaign ID: {campaign_id}
-
-Your campaign is now running. Calls are being made automatically.
-
-{ui.SEPARATOR_LIGHT}
-
-💡 **What's happening:**
-• Phone numbers are being dialed automatically
-• IVR message plays when answered
-• DTMF detection tracks who presses '1'
-• Credits are deducted for answered calls
-
-Use /campaigns to check real-time progress.
-""",
-        parse_mode='Markdown'
+        f"🚀 <b>Campaign #{campaign_id} Started!</b>\n\n"
+        f"• Phone numbers are being dialed automatically\n"
+        f"• IVR plays when answered\n"
+        f"• DTMF detection tracks Press-1\n"
+        f"• Credits deducted per call\n\n"
+        f"Use /campaigns to check progress.",
+        parse_mode='HTML'
     )
+
+
+# =============================================================================
+# Voice Selection Callbacks
+# =============================================================================
+
+async def handle_voice_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle voice file selection/upload callbacks"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    user = update.effective_user
+    
+    if data == "voice_upload_new":
+        context.user_data['campaign_step'] = 'voice_upload'
+        await query.edit_message_text(
+            "📤 <b>Upload Voice File</b>\n\n"
+            "Send a voice message or audio file for your IVR.\n"
+            "Supported: voice messages, .mp3, .wav, .ogg",
+            parse_mode='HTML'
+        )
+    
+    elif data.startswith("voice_select_"):
+        voice_id = int(data.replace("voice_select_", ""))
+        context.user_data['voice_id'] = voice_id
+        context.user_data['campaign_step'] = 'select_trunk'
+        
+        # Show trunk selection
+        user_data = await db.get_or_create_user(user.id)
+        trunks = await db.get_user_trunks(user_data['id'])
+        
+        keyboard = []
+        if trunks:
+            for trunk in trunks:
+                status = "🟢" if trunk['status'] == 'active' else "🔴"
+                keyboard.append([InlineKeyboardButton(
+                    f"{status} {trunk['name']} ({trunk['sip_host']})",
+                    callback_data=f"camp_trunk_{trunk['id']}"
+                )])
+        else:
+            keyboard.append([InlineKeyboardButton("➕ Add SIP Trunk First", callback_data="trunk_add")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="menu_main")])
+        
+        await query.edit_message_text(
+            "✅ Voice selected!\n\n"
+            "Step 3: <b>Select SIP Trunk</b>\n\n"
+            "Choose which trunk to route calls through:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+# =============================================================================
+# Campaign Setup Callbacks (trunk + lead selection)
+# =============================================================================
+
+async def handle_campaign_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle trunk and lead selection during campaign creation"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    user = update.effective_user
+    user_data = await db.get_or_create_user(user.id)
+    
+    if data.startswith("camp_trunk_"):
+        # User selected a trunk for campaign
+        trunk_id = int(data.replace("camp_trunk_", ""))
+        context.user_data['campaign_trunk_id'] = trunk_id
+        context.user_data['campaign_step'] = 'select_lead'
+        
+        trunk = await db.get_trunk(trunk_id)
+        
+        # Show lead list selection
+        leads = await db.get_user_leads(user_data['id'])
+        
+        keyboard = []
+        if leads:
+            for lead in leads:
+                avail = lead.get('available_numbers', 0)
+                total = lead.get('total_numbers', 0)
+                keyboard.append([InlineKeyboardButton(
+                    f"📋 {lead['list_name']} ({avail}/{total} avail)",
+                    callback_data=f"camp_lead_{lead['id']}"
+                )])
+        else:
+            keyboard.append([InlineKeyboardButton("➕ Create Lead List First", callback_data="lead_add")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="menu_main")])
+        
+        await query.edit_message_text(
+            f"✅ Trunk: <b>{trunk['name'] if trunk else 'Selected'}</b>\n\n"
+            f"Step 4: <b>Select Lead List</b>\n\n"
+            f"Choose which phone numbers to call:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    elif data.startswith("camp_lead_"):
+        # User selected a lead list - CREATE the campaign now
+        lead_id = int(data.replace("camp_lead_", ""))
+        trunk_id = context.user_data.get('campaign_trunk_id')
+        campaign_name = context.user_data.get('campaign_name', 'Unnamed Campaign')
+        
+        lead = await db.get_lead(lead_id)
+        trunk = await db.get_trunk(trunk_id) if trunk_id else None
+        
+        # Create the campaign with trunk and lead references
+        campaign_id = await db.create_campaign(
+            user_id=user_data['id'],
+            name=campaign_name,
+            trunk_id=trunk_id,
+            lead_id=lead_id,
+            caller_id=user_data.get('caller_id')
+        )
+        
+        context.user_data['campaign_id'] = campaign_id
+        context.user_data['creating_campaign'] = False
+        
+        avail = lead.get('available_numbers', 0) if lead else 0
+        trunk_name = trunk.get('name', 'N/A') if trunk else 'N/A'
+        lead_name = lead.get('list_name', 'N/A') if lead else 'N/A'
+        
+        await query.edit_message_text(
+            f"✅ <b>Campaign Ready!</b>\n\n"
+            f"📛 Name: {campaign_name}\n"
+            f"🔌 Trunk: {trunk_name}\n"
+            f"📋 Leads: {lead_name} ({avail} numbers)\n"
+            f"💰 Est. cost: ~${avail * 0.15:.2f}\n\n"
+            f"Click START to begin calling!",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 Start Campaign", callback_data=f"start_campaign_{campaign_id}")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
+        )
 
 
 # =============================================================================
@@ -764,26 +740,28 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
     user_data = await db.get_or_create_user(user.id)
     
     if action == "main":
-        # Return to main dashboard
+        stats = await db.get_user_stats(user.id)
         dashboard_text = f"""
 <b>1337 Press One</b>
 
-Hello 1337 P1 150$/1k lines, welcome to the advanced press-one system.
+Hello {user.first_name or 'User'}, welcome to the advanced press-one system.
 
 <b>Your Settings</b>
 Country Code: {user_data.get('country_code', '+1')} | Caller ID: {user_data.get('caller_id', 'Not Set')}
 
 <b>Account & System Info</b>
-Balance: ${user_data.get('balance', 0):.2f} | Available Lines: {user_data.get('available_lines', 0)}
-Lines Used: {user_data.get('lines_used', 0)} | System: {user_data.get('system_status', 'Ready')}
-
-Ready to launch your campaign?
+Balance: ${user_data.get('credits', 0):.2f} | Trunks: {stats.get('trunk_count', 0)} | Leads: {stats.get('lead_count', 0)}
+Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total_calls', 0)}
 """
         
         keyboard = [
             [
                 InlineKeyboardButton("🚀 Launch Campaign", callback_data="menu_launch"),
                 InlineKeyboardButton("💰 Check Balance", callback_data="menu_balance")
+            ],
+            [
+                InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks"),
+                InlineKeyboardButton("📋 My Leads", callback_data="menu_leads")
             ],
             [
                 InlineKeyboardButton("🔧 Configure CID", callback_data="menu_configure_cid"),
@@ -794,131 +772,176 @@ Ready to launch your campaign?
                 InlineKeyboardButton("🔑 Account Info", callback_data="menu_account")
             ],
             [
-                InlineKeyboardButton("⚙️ Admin Panel", callback_data="menu_admin"),
                 InlineKeyboardButton("💬 Contact Support", callback_data="menu_support")
             ]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            dashboard_text,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
+        await query.edit_message_text(dashboard_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
     
     elif action == "launch":
-        # Launch Campaign - simplified flow
-        # Check balance first
-        balance = user_data.get('balance', 0)
+        balance = user_data.get('credits', user_data.get('balance', 0))
         if balance <= 0:
             await query.edit_message_text(
-                "❌ You don't have enough credits.\\nPlease add credits to continue.",
+                "❌ Insufficient credits.",
                 parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("💰 Add Credits", callback_data="menu_balance"),
-                    InlineKeyboardButton("🔙 Back", callback_data="menu_main")
-                ]])
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💰 Add Credits", callback_data="menu_balance")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="menu_main")]
+                ])
             )
             return
         
-        # Start campaign creation
         context.user_data['creating_campaign'] = True
         context.user_data['campaign_step'] = 'name'
         
         await query.edit_message_text(
-            """
-📝 <b>Create New Campaign</b>
-
-Step 1: What would you like to name this campaign?
-
-Example: Product Launch 2026
-""",
+            "📝 <b>Create New Campaign</b>\n\nStep 1: Enter campaign name\n\nExample: Product Launch 2026",
             parse_mode='HTML'
         )
     
     elif action == "balance":
-        # Check Balance view
-        balance = user_data.get('balance', 0)
-        available_lines = user_data.get('available_lines', 0)
-        lines_used = user_data.get('lines_used', 0)
+        stats = await db.get_user_stats(user.id)
+        credits = stats.get('credits', 0) if stats else 0
+        
+        if credits > 100: credit_status = "🟢 Excellent"
+        elif credits > 50: credit_status = "🟡 Good"
+        elif credits > 10: credit_status = "🟠 Low"
+        else: credit_status = "🔴 Critical"
         
         balance_text = f"""
 💰 <b>Account Balance</b>
 
-<b>Current Balance:</b> ${balance:.2f}
-<b>Available Lines:</b> {available_lines}
-<b>Lines Used:</b> {lines_used}
+<b>Status:</b> {credit_status}
+<b>Credits:</b> {credits:.2f}
 
-<b>Pricing:</b>
-• 150$/1k lines
-• Bulk discounts available
-• Pay as you go
-
-Need more credits? Contact support!
+<b>Stats:</b>
+💵 Spent: ${stats.get('total_spent', 0):.2f}
+📞 Calls: {stats.get('total_calls', 0)}
+📊 Campaigns: {stats.get('campaign_count', 0)}
+🔌 Trunks: {stats.get('trunk_count', 0)}
+📋 Leads: {stats.get('lead_count', 0)}
 """
         
         keyboard = [
-            [InlineKeyboardButton("💬 Contact Support", callback_data="menu_support")],
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
+            [InlineKeyboardButton("💳 Buy Credits", callback_data="menu_buy")],
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            balance_text,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
+        await query.edit_message_text(balance_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif action == "buy":
+        buy_text = "💳 <b>Purchase Credits</b>\n\n"
+        keyboard = []
+        
+        for package_id, pkg in CREDIT_PACKAGES.items():
+            buy_text += f"📦 {pkg['credits']} Credits — ${pkg['price']} {pkg['currency']}\n"
+            keyboard.append([InlineKeyboardButton(
+                f"Select {pkg['credits']} Credits",
+                callback_data=f"buy_{package_id}"
+            )])
+        
+        buy_text += "\n✅ Secure payments via Oxapay\n✅ Instant delivery"
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_main")])
+        
+        await query.edit_message_text(buy_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif action == "trunks":
+        # SIP Trunk Management
+        trunks = await db.get_user_trunks(user_data['id'])
+        
+        trunks_text = "🔌 <b>My SIP Trunks</b>\n\n"
+        
+        if trunks:
+            for trunk in trunks:
+                status = "🟢" if trunk['status'] == 'active' else "🔴"
+                trunks_text += (
+                    f"{status} <b>{trunk['name']}</b>\n"
+                    f"   🌐 {trunk['sip_host']}:{trunk.get('sip_port', 5060)}\n"
+                    f"   👤 {trunk['sip_username']}\n"
+                    f"   🔗 <code>{trunk['pjsip_endpoint_name']}</code>\n\n"
+                )
+        else:
+            trunks_text += "No trunks configured yet.\n\nAdd your first SIP trunk to start making calls!\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("➕ Add New Trunk", callback_data="trunk_add")],
+        ]
+        
+        if trunks:
+            for trunk in trunks:
+                keyboard.append([
+                    InlineKeyboardButton(f"🗑 Delete {trunk['name'][:20]}", callback_data=f"trunk_delete_{trunk['id']}")
+                ])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")])
+        
+        await query.edit_message_text(trunks_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif action == "leads":
+        # Lead List Management
+        leads = await db.get_user_leads(user_data['id'])
+        
+        leads_text = "📋 <b>My Lead Lists</b>\n\n"
+        
+        if leads:
+            for lead in leads:
+                avail = lead.get('available_numbers', 0)
+                total = lead.get('total_numbers', 0)
+                leads_text += (
+                    f"📋 <b>{lead['list_name']}</b>\n"
+                    f"   📊 {avail}/{total} available | Created: {lead['created_at'].strftime('%Y-%m-%d') if hasattr(lead['created_at'], 'strftime') else 'N/A'}\n\n"
+                )
+        else:
+            leads_text += "No lead lists yet.\n\nCreate a lead list and upload phone numbers!\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("➕ Create Lead List", callback_data="lead_add")],
+        ]
+        
+        if leads:
+            for lead in leads:
+                keyboard.append([
+                    InlineKeyboardButton(f"🗑 Delete {lead['list_name'][:20]}", callback_data=f"lead_delete_{lead['id']}")
+                ])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")])
+        
+        await query.edit_message_text(leads_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
     
     elif action == "configure_cid":
-        # Caller ID Management Menu
         current_cid = user_data.get('caller_id', 'Not Set')
         
         cid_text = f"""
 🔧 <b>Caller ID Management</b>
 
-Configure your caller identification for optimal campaign performance.
+<b>Current CID:</b> {current_cid}
 
-<b>Current Setup</b>
-Active CID: {current_cid}
-
-<b>Configuration Options</b>
-Preset CIDs - Verified, high-performance numbers
-Custom CID - Use your own number with validation
-
-All caller IDs are validated against our blacklist for compliance.
+<b>Options:</b>
+• Preset CIDs - Verified, high-performance numbers
+• Custom CID - Use your own number
 """
         
         keyboard = [
             [InlineKeyboardButton("📋 Preset CIDs", callback_data="cid_preset")],
             [InlineKeyboardButton("✏️ Custom CID", callback_data="cid_custom")],
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
+            [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            cid_text,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
+        await query.edit_message_text(cid_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
     
     elif action == "statistics":
-        # Live Statistics view
         campaigns = await db.get_user_campaigns(user_data['id'], limit=5)
-        total_campaigns = len(campaigns)
-        total_calls = user_data.get('total_calls', 0)
         
         stats_text = f"""
 📊 <b>Live Statistics</b>
 
-<b>Your Campaign Stats</b>
-Total Campaigns: {total_campaigns}
-Total Calls Made: {total_calls}
-Lines Used: {user_data.get('lines_used', 0)}
+<b>Overview</b>
+Total Campaigns: {len(campaigns)}
+Total Calls: {user_data.get('total_calls', 0)}
 
-<b>Recent Activity</b>
+<b>Recent Campaigns</b>
 """
         
-        # Add recent campaigns
         if campaigns:
             for camp in campaigns[:3]:
                 stats_text += f"\n• {camp.get('name', 'Unnamed')} - {camp.get('status', 'Unknown')}"
@@ -927,473 +950,198 @@ Lines Used: {user_data.get('lines_used', 0)}
         
         keyboard = [
             [InlineKeyboardButton("📊 View All Campaigns", callback_data="menu_campaigns")],
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            stats_text,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
-    
-    elif action == "tools":
-        # Tools & Utilities menu
-        tools_text = """
-🛠️ <b>Tools & Utilities</b>
-
-<b>Available Tools:</b>
-
-• CSV Validator - Check your phone lists
-• Number Formatter - Format phone numbers
-• DNC Checker - Check Do Not Call list
-• Campaign Scheduler - Schedule campaigns
-
-More tools coming soon!
-"""
-        
-        keyboard = [
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            tools_text,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
-    
-    elif action == "account":
-        # Account Info view
-        account_text = f"""
-🔑 <b>Account Information</b>
-
-<b>Account Details</b>
-Username: @{user.username or 'Not set'}
-User ID: {user.id}
-Country Code: {user_data.get('country_code', '+1')}
-
-<b>Account Settings</b>
-Caller ID: {user_data.get('caller_id', 'Not Set')}
-Balance: ${user_data.get('balance', 0):.2f}
-Status: {user_data.get('system_status', 'Ready')}
-
-<b>Usage Stats</b>
-Available Lines: {user_data.get('available_lines', 0)}
-Lines Used: {user_data.get('lines_used', 0)}
-Total Calls: {user_data.get('total_calls', 0)}
-"""
-        
-        keyboard = [
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            account_text,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
-    
-    elif action == "admin":
-        # Admin Panel
-        admin_text = """
-⚙️ <b>Admin Panel</b>
-
-<b>System Administration</b>
-
-• User Management
-• System Configuration
-• Reports & Analytics
-• Billing Management
-
-Contact support for admin access.
-"""
-        
-        keyboard = [
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            admin_text,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
-    
-    elif action == "support":
-        # Contact Support
-        support_text = """
-💬 <b>Contact Support</b>
-
-<b>Need Help?</b>
-
-Our support team is here 24/7 to assist you.
-
-<b>Contact Methods:</b>
-📧 Email: support@1337.com
-💬 Telegram: @1337Support
-📞 Phone: +1 (555) 123-4567
-
-<b>Response Time:</b>
-Average: 2-4 hours
-Priority: Under 1 hour
-
-We're here to help!
-"""
-        
-        keyboard = [
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            support_text,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
-    
-    elif action == "campaigns":
-        # Show campaigns list (keeping existing functionality)
-        campaigns = await db.get_user_campaigns(user_data['id'], limit=10)
-        
-        if not campaigns:
-            empty_text = """
-📂 <b>No Campaigns Yet</b>
-
-You haven't created any campaigns yet.
-
-Ready to start? Create your first campaign now! 🚀
-"""
-            keyboard = [
-                [InlineKeyboardButton("🚀 Launch Campaign", callback_data="menu_launch")],
-                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                empty_text,
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-            return
-        
-        # Build campaigns list
-        campaigns_text = f"""
-📊 <b>My Campaigns</b>
-
-<b>Active Campaigns: {len([c for c in campaigns if c.get('status') == 'running'])}</b>
-
-"""
-        
-        keyboard = []
-        for campaign in campaigns:
-            status_emoji = {
-                'running': '🟢',
-                'paused': '🟡',
-                'completed': '✅',
-                'failed': '❌'
-            }.get(campaign.get('status', ''), '⚪')
-            
-            campaigns_text += f"{status_emoji} {campaign.get('name', 'Unnamed')}\n"
-            keyboard.append([InlineKeyboardButton(
-                f"📊 {campaign.get('name', 'Unnamed')}",
-                callback_data=f"details_{campaign['id']}"
-            )])
-        
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_main")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            campaigns_text,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
-    """Handle main menu navigation callbacks"""
-    query = update.callback_query
-    await query.answer()
-    
-    action = query.data.replace("menu_", "")
-    user = update.effective_user
-    
-    if action == "main":
-        # Show main menu
-        user_data = await db.get_or_create_user(user.id)
-        welcome_text = ui.main_menu_text(user_data)
-        
-        keyboard = [
-            [InlineKeyboardButton("💳 Buy Credits", callback_data="menu_buy")],
-            [InlineKeyboardButton("📝 New Campaign", callback_data="menu_new_campaign")],
-            [InlineKeyboardButton("📊 My Campaigns", callback_data="menu_campaigns")],
-            [
-                InlineKeyboardButton("💰 Balance", callback_data="menu_balance"),
-                InlineKeyboardButton("❓ Help", callback_data="menu_help")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            welcome_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    
-    elif action == "balance":
-        # Show balance - call balance handler logic
-        stats = await db.get_user_stats(user.id)
-        
-        if not stats:
-            await query.edit_message_text("❌ User not found. Use /start first.")
-            return
-        
-        credits = stats['credits']
-        
-        if credits > 100:
-            credit_status = "🟢 Excellent"
-        elif credits > 50:
-            credit_status = "🟡 Good"
-        elif credits > 10:
-            credit_status = "🟠 Low"
-        else:
-            credit_status = "🔴 Critical"
-        
-        balance_text = f"""
-💰 **Your Account Balance**
-{ui.SEPARATOR_HEAVY}
-
-**Status:** {credit_status}
-**Available Credits:** {credits:.2f}
-
-{ui.SEPARATOR_LIGHT}
-
-**Account Statistics:**
-💵 Total Spent: ${stats['total_spent']:.2f}
-📞 Total Calls: {stats['total_calls']}
-📊 Campaigns: {stats['campaign_count']}
-
-{ui.SEPARATOR_LIGHT}
-
-💡 **Pricing:** 1 credit ≈ 1 minute of calling
-"""
-        
-        keyboard = [
-            [InlineKeyboardButton("💳 Buy More Credits", callback_data="menu_buy")],
             [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            balance_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    
-    elif action == "buy":
-        # Show buy credits menu - simplified version
-        keyboard = []
-        package_items = list(CREDIT_PACKAGES.items())
-        
-        buy_text = f"""
-💳 **Purchase Credits**
-{ui.SEPARATOR_HEAVY}
-
-**Available Packages:**
-
-"""
-        
-        for package_id, package_data in CREDIT_PACKAGES.items():
-            credits = package_data['credits']
-            price = package_data['price']
-            currency = package_data['currency']
-            buy_text += ui.package_card(credits, price, currency) + "\n\n"
-            
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"Select {credits} Credits",
-                    callback_data=f"buy_{package_id}"
-                )
-            ])
-        
-        buy_text += f"""
-{ui.SEPARATOR_LIGHT}
-
-**Payment Options:**
-✅ Cryptocurrency (USDT, BTC, ETH)
-✅ Instant delivery
-✅ Secure via Oxapay
-✅ No hidden fees
-
-👇 Select a package below:
-"""
-        
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_main")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            buy_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+        await query.edit_message_text(stats_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
     
     elif action == "campaigns":
-        # Show campaigns list
-        user_data = await db.get_or_create_user(user.id)
         campaigns = await db.get_user_campaigns(user_data['id'], limit=10)
         
         if not campaigns:
-            empty_text = f"""
-📂 **No Campaigns Yet**
-{ui.SEPARATOR_LIGHT}
-
-You haven't created any campaigns yet.
-
-Ready to start? Create your first campaign now! 🚀
-"""
-            keyboard = [
-                [InlineKeyboardButton("📝 Create Campaign", callback_data="menu_new_campaign")],
-                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
             await query.edit_message_text(
-                empty_text,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
+                "📂 <b>No Campaigns</b>\n\nCreate your first campaign!",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🚀 Launch Campaign", callback_data="menu_launch")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                ])
             )
             return
         
-        campaigns_text = f"""
-📊 **Your Campaigns**
-{ui.SEPARATOR_HEAVY}
-
-Showing {len(campaigns)} most recent campaigns:
-
-"""
-        
+        text = f"📊 <b>My Campaigns</b> ({len(campaigns)})\n\n"
         keyboard = []
         for camp in campaigns:
-            campaigns_text += ui.campaign_card(camp) + "\n\n"
+            emoji = {'running': '🟢', 'paused': '🟡', 'completed': '✅', 'failed': '❌'}.get(camp.get('status', ''), '⚪')
+            trunk = camp.get('trunk_name', '-')
+            text += f"{emoji} <b>{camp['name']}</b>\n   📞 {camp.get('completed', 0)}/{camp.get('total_numbers', 0)} | 🔌 {trunk}\n\n"
             
-            campaign_id = camp['id']
-            status = camp['status']
-            
-            if status == 'running':
+            cid = camp['id']
+            if camp.get('status') == 'running':
                 keyboard.append([
-                    InlineKeyboardButton(
-                        f"⏸️ Pause '{camp['name'][:20]}'",
-                        callback_data=f"pause_{campaign_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "📊 Details",
-                        callback_data=f"details_{campaign_id}"
-                    )
+                    InlineKeyboardButton(f"⏸️ Pause", callback_data=f"pause_{cid}"),
+                    InlineKeyboardButton(f"📊 Details", callback_data=f"details_{cid}")
                 ])
-            elif status == 'paused':
+            elif camp.get('status') == 'paused':
                 keyboard.append([
-                    InlineKeyboardButton(
-                        f"▶️ Resume '{camp['name'][:20]}'",
-                        callback_data=f"resume_{campaign_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "📊 Details",
-                        callback_data=f"details_{campaign_id}"
-                    )
+                    InlineKeyboardButton(f"▶️ Resume", callback_data=f"resume_{cid}"),
+                    InlineKeyboardButton(f"📊 Details", callback_data=f"details_{cid}")
                 ])
             else:
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"📊 View '{camp['name'][:20]}'",
-                        callback_data=f"details_{campaign_id}"
-                    )
-                ])
+                keyboard.append([InlineKeyboardButton(f"📊 {camp['name'][:25]}", callback_data=f"details_{cid}")])
         
         keyboard.append([
             InlineKeyboardButton("🔄 Refresh", callback_data="menu_campaigns"),
             InlineKeyboardButton("🔙 Menu", callback_data="menu_main")
         ])
         
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif action == "tools":
         await query.edit_message_text(
-            campaigns_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
+            "🛠️ <b>Tools & Utilities</b>\n\n• CSV Validator\n• Number Formatter\n• DNC Checker\n\nMore tools coming soon!",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]])
         )
     
-    
-    elif action == "new_campaign":
-        # Start new campaign creation flow
-        # Set up user context for campaign creation
-        context.user_data['creating_campaign'] = True
-        context.user_data['campaign_step'] = 'name'
-        
-        await query.edit_message_text(
-            """
-📝 <b>Create New Campaign</b>
+    elif action == "account":
+        stats = await db.get_user_stats(user.id)
+        account_text = f"""
+🔑 <b>Account Information</b>
 
-Step 1: What would you like to name this campaign?
+<b>Profile</b>
+Username: @{user.username or 'Not set'}
+User ID: {user.id}
 
-Example: Product Launch 2026
-""",
-            parse_mode='HTML'
-        )
-    
-    elif action == "help":
-        help_text = f"""
-❓ <b>Help & Support</b>
-{ui.SEPARATOR_HEAVY}
+<b>Settings</b>
+Caller ID: {user_data.get('caller_id', 'Not Set')}
+Balance: ${user_data.get('credits', 0):.2f}
 
-<b>Commands:</b>
-/start - Start the bot
-/balance - Check your credits
-/buy - Purchase credits
-/new_campaign - Create new campaign
-/campaigns - View all campaigns
-/help - Show this help
-
-{ui.SEPARATOR_LIGHT}
-
-<b>Campaign Creation:</b>
-1. Use /new_campaign
-2. Give it a name
-3. Upload CSV file with phone numbers
-4. Start the campaign
-
-{ui.SEPARATOR_LIGHT}
-
-<b>CSV Format:</b>
-Your CSV should have phone numbers in the first column:
-
-1234567890
-9876543210
-5555555555
-
-{ui.SEPARATOR_LIGHT}
-
-<b>Pricing:</b>
-• 1 credit ≈ 1 minute of calling
-• Minimum 6 seconds billing
-• 6-second increments
-
-<b>Technical Info:</b>
-• Powered by Asterisk PBX
-• MagnusBilling trunk provider
-• Oxapay payment processing
+<b>Resources</b>
+🔌 SIP Trunks: {stats.get('trunk_count', 0)}
+📋 Lead Lists: {stats.get('lead_count', 0)}
+📊 Campaigns: {stats.get('campaign_count', 0)}
+📞 Total Calls: {stats.get('total_calls', 0)}
 """
         
-        keyboard = [[InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await query.edit_message_text(
-            help_text,
-            parse_mode='HTML',
-            reply_markup=reply_markup
+            account_text, parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]])
         )
-
-
+    
+    elif action == "support":
+        await query.edit_message_text(
+            "💬 <b>Contact Support</b>\n\n📧 Email: support@1337.com\n💬 Telegram: @1337Support\n\nResponse time: 2-4 hours",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]])
+        )
 
 
 # =============================================================================
-# Caller ID Management Callbacks
+# Trunk Management Callbacks
+# =============================================================================
+
+async def handle_trunk_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle SIP trunk add/delete callbacks"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    user = update.effective_user
+    
+    if data == "trunk_add":
+        # Start trunk creation flow
+        context.user_data['awaiting_trunk_input'] = True
+        context.user_data['trunk_step'] = 'name'
+        
+        await query.edit_message_text(
+            "🔌 <b>Add New SIP Trunk</b>\n\n"
+            "Step 1: Enter a name for this trunk\n\n"
+            "Example: MagnusBilling Main",
+            parse_mode='HTML'
+        )
+    
+    elif data.startswith("trunk_delete_"):
+        trunk_id = int(data.replace("trunk_delete_", ""))
+        trunk = await db.get_trunk(trunk_id)
+        
+        await query.edit_message_text(
+            f"⚠️ <b>Delete Trunk?</b>\n\n"
+            f"Trunk: {trunk['name'] if trunk else 'Unknown'}\n\n"
+            f"This action cannot be undone.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Yes, Delete", callback_data=f"trunk_confirm_delete_{trunk_id}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="menu_trunks")]
+            ])
+        )
+    
+    elif data.startswith("trunk_confirm_delete_"):
+        trunk_id = int(data.replace("trunk_confirm_delete_", ""))
+        await db.delete_trunk(trunk_id)
+        
+        await query.edit_message_text(
+            "✅ Trunk deleted.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
+        )
+
+
+# =============================================================================
+# Lead Management Callbacks
+# =============================================================================
+
+async def handle_lead_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle lead list add/delete callbacks"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data == "lead_add":
+        context.user_data['awaiting_lead_name'] = True
+        
+        await query.edit_message_text(
+            "📋 <b>Create Lead List</b>\n\n"
+            "Enter a name for your lead list:\n\n"
+            "Example: US Contacts Feb 2026",
+            parse_mode='HTML'
+        )
+    
+    elif data.startswith("lead_delete_"):
+        lead_id = int(data.replace("lead_delete_", ""))
+        lead = await db.get_lead(lead_id)
+        
+        await query.edit_message_text(
+            f"⚠️ <b>Delete Lead List?</b>\n\n"
+            f"List: {lead['list_name'] if lead else 'Unknown'}\n\n"
+            f"All phone numbers in this list will be deleted.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Yes, Delete", callback_data=f"lead_confirm_delete_{lead_id}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="menu_leads")]
+            ])
+        )
+    
+    elif data.startswith("lead_confirm_delete_"):
+        lead_id = int(data.replace("lead_confirm_delete_", ""))
+        await db.delete_lead_list(lead_id)
+        
+        await query.edit_message_text(
+            "✅ Lead list deleted.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 My Leads", callback_data="menu_leads")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
+        )
+
+
+# =============================================================================
+# Caller ID Callbacks
 # =============================================================================
 
 async def handle_cid_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1405,298 +1153,156 @@ async def handle_cid_callbacks(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     
     if data == "cid_preset":
-        # Show preset CIDs list
-        preset_cids = await db.get_preset_cids()
-        
-        cid_list_text = """
-📋 <b>Preset Caller IDs</b>
-
-Select a verified, high-performance caller ID:
-
-"""
-        
+        cids = await db.get_preset_cids()
         keyboard = []
-        for cid in preset_cids:
-            cid_list_text += f"• {cid['name']}: {cid['number']}\n"
+        for cid in cids:
             keyboard.append([InlineKeyboardButton(
-                f"✅ {cid['name']}",
+                f"📞 {cid.get('name', 'CID')} — {cid['number']}",
                 callback_data=f"setcid_{cid['number']}"
             )])
-        
         keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_configure_cid")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            cid_list_text,
+            "📋 <b>Select Preset CID</b>\n\nChoose a verified caller ID:",
             parse_mode='HTML',
-            reply_markup=reply_markup
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     elif data == "cid_custom":
-        # Initiate custom CID input
         context.user_data['awaiting_custom_cid'] = True
         
         await query.edit_message_text(
-            """
-✏️ <b>Set Custom Caller ID</b>
-
-Send me your desired CID as a message.
-
-<b>Format:</b> Just the numbers (e.g., 15551234567)
-<b>Length:</b> 10-15 digits
-
-⚠️ <b>Your CID will be validated against our blacklist for compliance.</b>
-
-Type /cancel to cancel.
-""",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Back", callback_data="menu_configure_cid")
-            ]])
+            "✏️ <b>Enter Custom CID</b>\n\nType your phone number (10-15 digits):\n\nExample: 12025551234",
+            parse_mode='HTML'
         )
     
     elif data.startswith("setcid_"):
-        # Set selected CID
         cid = data.replace("setcid_", "")
         await db.set_caller_id(user.id, cid)
         
         await query.edit_message_text(
-            f"""
-✅ <b>CID Set Successfully</b>
-
-Your Caller ID has been set to: {cid}
-
-This CID will be used for all your campaigns.
-""",
+            f"✅ <b>CID Set:</b> {cid}",
             parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
         )
 
 
 # =============================================================================
-# Campaign Control Callbacks
+# Campaign Control Callbacks (pause/resume/details/logs)
 # =============================================================================
-
-
-
-async def handle_voice_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle voice file selection callbacks"""
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    
-    if data == "voice_upload_new":
-        # User wants to upload new voice file
-        context.user_data['campaign_step'] = 'voice_upload'
-        
-        await query.edit_message_text(
-            """
-🎤 <b>Upload New Voice File</b>
-
-Please send your IVR audio message now.
-
-<b>Supported Formats:</b>
-• Voice messages
-• Audio files (MP3, WAV, OGG)
-• Max duration: 60 seconds
-
-Send the file now →
-""",
-            parse_mode='HTML'
-        )
-    
-    elif data.startswith("voice_select_"):
-        # User selected an existing voice file
-        voice_id = int(data.split("_")[-1])
-        context.user_data['voice_id'] = voice_id
-        context.user_data['campaign_step'] = 'upload'
-        
-        # Get voice file info
-        voice = await db.get_voice_file(voice_id)
-        
-        await query.edit_message_text(
-            f"""
-✅ <b>Voice File Selected!</b>
-
-📝 {voice.get('name', 'Unknown')}
-⏱️ Duration: {voice.get('duration', 0)}s
-
-Step 3: Upload Phone Numbers
-
-Upload your phone numbers as a CSV file.
-
-<b>CSV Format:</b>
-One phone number per line
-
-Example:
-1234567890
-9876543210
-5555555555
-
-Send the CSV file now →
-""",
-            parse_mode='HTML'
-        )
-
 
 async def handle_campaign_controls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle campaign pause/resume/details/logs callbacks"""
     query = update.callback_query
     await query.answer()
     
-    parts = query.data.split('_')
-    action = parts[0]
-    campaign_id = int(parts[1])
+    data = query.data
     
-    if action == "pause":
-        # Pause campaign
+    if data.startswith("pause_"):
+        campaign_id = int(data.replace("pause_", ""))
         await db.stop_campaign(campaign_id)
-        await query.answer("⏸️ Campaign paused")
-        
-        # Refresh campaigns list
-        query.data = "menu_campaigns"
-        await handle_menu_callbacks(update, context)
-    
-    elif action == "resume":
-        # Resume campaign
-        await db.start_campaign(campaign_id)
-        await query.answer("▶️ Campaign resumed")
-        
-        # Refresh campaigns list
-        query.data = "menu_campaigns"
-        await handle_menu_callbacks(update, context)
-    
-    elif action == "logs":
-        # Show detailed call logs
-        call_logs = await db.get_campaign_call_logs(campaign_id, limit=20)
-        stats = await db.get_campaign_stats(campaign_id)
-        
-        logs_text = f"""
-📋 <b>Call Logs</b> - {stats.get('name', 'Campaign')}
-
-━━━━━━━━━━━━━━━━━━━━━━
-
-"""
-        
-        for i, log in enumerate(call_logs, 1):
-            # Status emoji
-            if log['status'] == 'pressed_one':
-                status_icon = "✅"
-                status_text = "PRESSED 1"
-            elif log['status'] == 'answered':
-                status_icon = "📞"
-                status_text = "Answered"
-            elif log['status'] == 'no_answer':
-                status_icon = "⭕"
-                status_text = "No Answer"
-            else:
-                status_icon = "❌"
-                status_text = "Failed"
-            
-            # Format timestamp
-            from datetime import datetime # Assuming datetime needs to be imported
-            time_ago = datetime.now() - log['timestamp']
-            if time_ago.seconds < 60:
-                time_str = f"{time_ago.seconds}s ago"
-            elif time_ago.seconds < 3600:
-                time_str = f"{time_ago.seconds // 60}m ago"
-            else:
-                time_str = f"{time_ago.seconds // 3600}h ago"
-            
-            logs_text += f"""
-{i}. {status_icon} <b>{status_text}</b>
-   📱 {log['phone_number']}
-   ⏱️ {log.get('duration', 0)}s • 💰 ${log.get('cost', 0):.2f}
-   🕒 {time_str}
-
-"""
-        
-        logs_text += """
-━━━━━━━━━━━━━━━━━━━━━━
-
-<b>Legend:</b>
-✅ = Pressed 1 (Success!)
-📞 = Answered
-⭕ = No answer
-❌ = Failed
-"""
-        
-        keyboard = [
-            [InlineKeyboardButton("🔙 Back to Summary", callback_data=f"details_{campaign_id}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            logs_text,
+            f"⏸️ <b>Campaign #{campaign_id} Paused</b>\n\nUse /campaigns to resume.",
             parse_mode='HTML',
-            reply_markup=reply_markup
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 View Campaigns", callback_data="menu_campaigns")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
         )
     
-    elif action == "details":
-        # Show campaign summary in clean format
+    elif data.startswith("resume_"):
+        campaign_id = int(data.replace("resume_", ""))
+        await db.start_campaign(campaign_id)
+        
+        await query.edit_message_text(
+            f"▶️ <b>Campaign #{campaign_id} Resumed</b>",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 View Campaigns", callback_data="menu_campaigns")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
+        )
+    
+    elif data.startswith("details_"):
+        campaign_id = int(data.replace("details_", ""))
         stats = await db.get_campaign_stats(campaign_id)
         
         if not stats:
-            await query.edit_message_text("❌ Campaign not found")
+            await query.edit_message_text("❌ Campaign not found.")
             return
         
-        # Calculate stats
         total = stats.get('total_numbers', 0)
         completed = stats.get('completed', 0)
-        pressed_one = stats.get('pressed_one', 0)
         answered = stats.get('answered', 0)
-        voicemails = 0  # Mock data doesn't have this yet
+        pressed = stats.get('pressed_one', 0)
+        failed = stats.get('failed', 0)
+        cost = stats.get('actual_cost', 0)
+        progress = (completed / total * 100) if total > 0 else 0
+        answer_rate = (answered / completed * 100) if completed > 0 else 0
+        press_rate = (pressed / answered * 100) if answered > 0 else 0
         
-        # Calculate rates
-        progress_pct = (completed / total * 100) if total > 0 else 0
-        p1_rate = (pressed_one / answered * 100) if answered > 0 else 0
-        voicemail_rate = (voicemails / completed * 100) if completed > 0 else 0
-        remaining = total - completed
+        trunk_name = stats.get('trunk_name', 'N/A')
+        lead_name = stats.get('lead_name', 'N/A')
         
-        # Create progress bar
-        bar_length = 10
-        filled = int((completed / total) * bar_length) if total > 0 else 0
-        progress_bar = "█" * filled + "░" * (bar_length - filled)
-        
-        # Format message in clean style
         details_text = f"""
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ 📊 {stats.get('name', 'Campaign').upper()} ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+📊 <b>{stats.get('name', 'Campaign')}</b>
 
-🎯 <b>RESULTS:</b>
-💎 Pressed 1: {pressed_one}
-💼 Total: {completed}
-📞 Voicemails: {voicemails}
+<b>Status:</b> {stats.get('status', 'Unknown').upper()}
+<b>Trunk:</b> 🔌 {trunk_name}
+<b>Leads:</b> 📋 {lead_name}
 
-⚡ <b>PROGRESS:</b>
-[{progress_bar}] {progress_pct:.1f}% ({completed}/{total})
-⏳ Remaining: {remaining}
-🎯 P1 Rate: {p1_rate:.2f}%
-📞 Voicemail Rate: {voicemail_rate:.2f}%
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-💰 Cost: ${stats.get('actual_cost', 0):.2f}
-📊 Status: {ui.status_badge(stats.get('status', 'unknown'))}
+<b>Progress:</b> {completed}/{total} ({progress:.0f}%)
+<b>Answered:</b> {answered} ({answer_rate:.0f}%)
+<b>Press-1:</b> {pressed} ({press_rate:.0f}%)
+<b>Failed:</b> {failed}
+<b>Cost:</b> ${cost:.2f}
 """
         
         keyboard = [
-            [
-                InlineKeyboardButton("📋 View Call Logs", callback_data=f"logs_{campaign_id}"),
-                InlineKeyboardButton("🔄 Refresh", callback_data=f"details_{campaign_id}")
-            ],
-            [InlineKeyboardButton("🔙 Back to Campaigns", callback_data="menu_campaigns")]
+            [InlineKeyboardButton("📝 Call Logs", callback_data=f"logs_{campaign_id}")],
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        status = stats.get('status', '')
+        if status == 'running':
+            keyboard.append([InlineKeyboardButton("⏸️ Pause", callback_data=f"pause_{campaign_id}")])
+        elif status == 'paused':
+            keyboard.append([InlineKeyboardButton("▶️ Resume", callback_data=f"resume_{campaign_id}")])
+        
+        keyboard.append([
+            InlineKeyboardButton("🔄 Refresh", callback_data=f"details_{campaign_id}"),
+            InlineKeyboardButton("🔙 Back", callback_data="menu_campaigns")
+        ])
+        
+        await query.edit_message_text(details_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif data.startswith("logs_"):
+        campaign_id = int(data.replace("logs_", ""))
+        logs = await db.get_campaign_call_logs(campaign_id, limit=10)
+        
+        if not logs:
+            await query.edit_message_text(
+                "📝 <b>No Logs Yet</b>",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data=f"details_{campaign_id}")]
+                ])
+            )
+            return
+        
+        text = f"📝 <b>Call Logs</b> (Last {len(logs)})\n\n"
+        for log in logs[:10]:
+            emoji = "✅" if log.get('pressed_one') else ("📞" if log.get('answered') else "❌")
+            text += f"{emoji} {log.get('phone_number', 'N/A')} | {log.get('duration', 0)}s | ${log.get('cost', 0):.2f}\n"
         
         await query.edit_message_text(
-            details_text,
+            text,
             parse_mode='HTML',
-            reply_markup=reply_markup
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data=f"details_{campaign_id}")]
+            ])
         )
 
 
@@ -1719,7 +1325,6 @@ async def post_shutdown(application: Application):
 def main():
     """Main function to run the bot"""
     
-    # Create application
     application = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
@@ -1728,7 +1333,7 @@ def main():
         .build()
     )
     
-    # Add command handlers
+    # Command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("balance", balance_command))
     application.add_handler(CommandHandler("buy", buy_command))
@@ -1736,39 +1341,24 @@ def main():
     application.add_handler(CommandHandler("campaigns", campaigns_command))
     application.add_handler(CommandHandler("help", help_command))
     
-    # Add callback handlers
-    application.add_handler(
-        CallbackQueryHandler(handle_buy_callback, pattern="^buy_")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_start_campaign, pattern="^start_campaign_")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_menu_callbacks, pattern="^menu_")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_voice_selection, pattern="^voice_")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_cid_callbacks, pattern="^(cid_|setcid_)")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_campaign_controls, pattern="^(pause|resume|details|logs)_")
-    )
+    # Callback handlers
+    application.add_handler(CallbackQueryHandler(handle_buy_callback, pattern="^buy_"))
+    application.add_handler(CallbackQueryHandler(handle_start_campaign, pattern="^start_campaign_"))
+    application.add_handler(CallbackQueryHandler(handle_campaign_setup, pattern="^camp_"))
+    application.add_handler(CallbackQueryHandler(handle_trunk_callbacks, pattern="^trunk_"))
+    application.add_handler(CallbackQueryHandler(handle_lead_callbacks, pattern="^lead_"))
+    application.add_handler(CallbackQueryHandler(handle_menu_callbacks, pattern="^menu_"))
+    application.add_handler(CallbackQueryHandler(handle_voice_selection, pattern="^voice_"))
+    application.add_handler(CallbackQueryHandler(handle_cid_callbacks, pattern="^(cid_|setcid_)"))
+    application.add_handler(CallbackQueryHandler(handle_campaign_controls, pattern="^(pause|resume|details|logs)_"))
     
-    # Add message handlers
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-    )
-    application.add_handler(
-        MessageHandler(filters.VOICE | filters.AUDIO, handle_voice)
-    )
-    application.add_handler(
-        MessageHandler(filters.Document.ALL, handle_file)
-    )
+    # Message handlers
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_file))
     
     # Start bot
-    logger.info("🚀 Starting Press-1 IVR Bot...")
+    logger.info("🚀 Starting Press-1 IVR Bot (User-Scoped PJSIP)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

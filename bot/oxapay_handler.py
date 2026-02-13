@@ -54,7 +54,7 @@ class OxapayHandler:
             "orderId": order_id,
             "callbackUrl": self.webhook_url,
             "description": description or "IVR Bot Credits",
-            "returnUrl": "https://t.me/your_bot_username",  # ⚠️ Update with your bot
+            "returnUrl": "https://t.me/callnowp1_bot",
         }
         
         try:
