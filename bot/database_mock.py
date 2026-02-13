@@ -316,7 +316,8 @@ class MockDatabase:
         name: str,
         trunk_id: Optional[int] = None,
         lead_id: Optional[int] = None,
-        caller_id: Optional[str] = None
+        caller_id: Optional[str] = None,
+        country_code: str = ''
     ) -> int:
         campaign_id = self.next_campaign_id
         self.next_campaign_id += 1
@@ -336,6 +337,7 @@ class MockDatabase:
             'trunk_id': trunk_id,
             'lead_id': lead_id,
             'caller_id': caller_id,
+            'country_code': country_code,
             'trunk_name': trunk_name,
             'lead_name': lead_name,
             'total_numbers': 0,

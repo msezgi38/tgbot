@@ -93,6 +93,32 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 # =============================================================================
 ADMIN_TELEGRAM_IDS = [123456789]         # ⚠️ Add your Telegram ID for admin access
 
+# Test Mode - Bypasses balance checks for admins
+TEST_MODE = True                          # Set to False in production
+
+# =============================================================================
+# Country Codes
+# =============================================================================
+SUPPORTED_COUNTRY_CODES = {
+    "1": "🇺🇸 US/Canada",
+    "44": "🇬🇧 UK",
+    "49": "🇩🇪 Germany",
+    "61": "🇦🇺 Australia",
+    "33": "🇫🇷 France",
+    "39": "🇮🇹 Italy",
+    "34": "🇪🇸 Spain",
+    "31": "🇳🇱 Netherlands",
+    "90": "🇹🇷 Turkey",
+    "81": "🇯🇵 Japan",
+    "86": "🇨🇳 China",
+    "91": "🇮🇳 India",
+    "55": "🇧🇷 Brazil",
+    "7": "🇷🇺 Russia",
+    "971": "🇦🇪 UAE",
+    "966": "🇸🇦 Saudi Arabia",
+    "none": "🌍 No Prefix (already includes code)",
+}
+
 # =============================================================================
 # File Paths
 # =============================================================================

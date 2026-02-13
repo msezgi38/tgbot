@@ -16,10 +16,9 @@ import asyncpg
 
 from ami_client import AsteriskAMIClient
 from config import (
-    DATABASE_URL,
-    MAX_CONCURRENT_CALLS,
-    DELAY_BETWEEN_CALLS,
-    CALL_TIMEOUT_SECONDS
+    DATABASE_URL, AMI_CONFIG, IVR_CONTEXT,
+    MAX_CONCURRENT_CALLS, CALL_TIMEOUT_SECONDS,
+    DELAY_BETWEEN_CALLS, TEST_MODE
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -103,7 +102,7 @@ class CampaignWorker:
                 SELECT 
                     c.id, c.user_id, c.name, c.caller_id, 
                     c.total_numbers, c.completed,
-                    c.trunk_id, c.lead_id,
+                    c.trunk_id, c.lead_id, c.country_code,
                     ut.pjsip_endpoint_name as trunk_endpoint,
                     ut.caller_id as trunk_caller_id,
                     ut.max_channels as trunk_max_channels,
@@ -135,11 +134,12 @@ class CampaignWorker:
             return
         
         # Check user has sufficient credits
-        credits = await self.get_user_credits(user_id)
-        if credits <= 0:
-            logger.warning(f"⚠️ Campaign {campaign_id}: User {user_id} has insufficient credits")
-            await self.pause_campaign(campaign_id, "Insufficient credits")
-            return
+        if not TEST_MODE:
+            credits = await self.get_user_credits(user_id)
+            if credits <= 0:
+                logger.warning(f"⚠️ Campaign {campaign_id}: User {user_id} has insufficient credits")
+                await self.pause_campaign(campaign_id, "Insufficient credits")
+                return
         
         # Fetch pending numbers
         numbers = await self.get_pending_numbers(campaign_id, limit=10)
@@ -151,10 +151,14 @@ class CampaignWorker:
         
         # Determine CallerID: campaign override > trunk default > global default
         caller_id = campaign.get('caller_id') or campaign.get('trunk_caller_id')
+        country_code = campaign.get('country_code', '')
         
         # Process each number
         tasks = []
         for number_data in numbers:
+            # Prepend country code if set
+            if country_code and not number_data['phone_number'].startswith(country_code):
+                number_data['phone_number'] = country_code + number_data['phone_number']
             task = asyncio.create_task(
                 self.dial_number(campaign, number_data, trunk_endpoint, caller_id)
             )

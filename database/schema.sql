@@ -135,6 +135,7 @@ CREATE TABLE campaigns (
     lead_id INTEGER REFERENCES leads(id),             -- Which lead list to call
     name VARCHAR(255) NOT NULL,                       -- Campaign name
     caller_id VARCHAR(50),                            -- CallerID override for this campaign
+    country_code VARCHAR(10) DEFAULT '',               -- Country code prefix (e.g. 49, 44, 1)
     total_numbers INTEGER DEFAULT 0,                  -- Total phone numbers
     completed INTEGER DEFAULT 0,                      -- Calls completed
     answered INTEGER DEFAULT 0,                       -- Calls answered

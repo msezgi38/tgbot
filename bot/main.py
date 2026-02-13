@@ -18,7 +18,7 @@ from telegram.ext import (
     filters
 )
 
-from config import TELEGRAM_BOT_TOKEN, CREDIT_PACKAGES, ADMIN_TELEGRAM_IDS
+from config import TELEGRAM_BOT_TOKEN, CREDIT_PACKAGES, ADMIN_TELEGRAM_IDS, TEST_MODE, SUPPORTED_COUNTRY_CODES
 # Using mock database for UI testing (no PostgreSQL required)
 from database_mock import db
 from oxapay_handler import oxapay
@@ -687,36 +687,64 @@ async def handle_campaign_setup(update: Update, context: ContextTypes.DEFAULT_TY
         )
     
     elif data.startswith("camp_lead_"):
-        # User selected a lead list - CREATE the campaign now
+        # User selected a lead list - show country code selection
         lead_id = int(data.replace("camp_lead_", ""))
+        context.user_data['campaign_lead_id'] = lead_id
+        context.user_data['campaign_step'] = 'select_country'
+        
+        keyboard = []
+        for code, label in SUPPORTED_COUNTRY_CODES.items():
+            keyboard.append([InlineKeyboardButton(
+                f"{label}" + (f" (+{code})" if code != 'none' else ""),
+                callback_data=f"camp_cc_{code}"
+            )])
+        
+        await query.edit_message_text(
+            "🌍 Step 5: <b>Select Country Code</b>\n\n"
+            "Choose the country for your phone numbers:\n"
+            "This prefix will be added to all numbers.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    elif data.startswith("camp_cc_"):
+        # User selected country code - CREATE the campaign now
+        country_code = data.replace("camp_cc_", "")
+        if country_code == 'none':
+            country_code = ''
+        
         trunk_id = context.user_data.get('campaign_trunk_id')
+        lead_id = context.user_data.get('campaign_lead_id')
         campaign_name = context.user_data.get('campaign_name', 'Unnamed Campaign')
         
         lead = await db.get_lead(lead_id)
         trunk = await db.get_trunk(trunk_id) if trunk_id else None
         
-        # Create the campaign with trunk and lead references
         campaign_id = await db.create_campaign(
             user_id=user_data['id'],
             name=campaign_name,
             trunk_id=trunk_id,
             lead_id=lead_id,
-            caller_id=user_data.get('caller_id')
+            caller_id=user_data.get('caller_id'),
+            country_code=country_code
         )
         
+        # Store country code for this campaign
         context.user_data['campaign_id'] = campaign_id
+        context.user_data['campaign_country_code'] = country_code
         context.user_data['creating_campaign'] = False
         
         avail = lead.get('available_numbers', 0) if lead else 0
         trunk_name = trunk.get('name', 'N/A') if trunk else 'N/A'
         lead_name = lead.get('list_name', 'N/A') if lead else 'N/A'
+        cc_display = f'+{country_code}' if country_code else 'No prefix'
         
         await query.edit_message_text(
             f"✅ <b>Campaign Ready!</b>\n\n"
             f"📛 Name: {campaign_name}\n"
             f"🔌 Trunk: {trunk_name}\n"
             f"📋 Leads: {lead_name} ({avail} numbers)\n"
-            f"💰 Est. cost: ~${avail * 0.15:.2f}\n\n"
+            f"🌍 Country: {cc_display}\n\n"
             f"Click START to begin calling!",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup([
@@ -780,7 +808,7 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
     
     elif action == "launch":
         balance = user_data.get('credits', user_data.get('balance', 0))
-        if balance <= 0:
+        if balance <= 0 and not TEST_MODE:
             await query.edit_message_text(
                 "❌ Insufficient credits.",
                 parse_mode='HTML',

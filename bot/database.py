@@ -399,15 +399,16 @@ class Database:
         name: str,
         trunk_id: Optional[int] = None,
         lead_id: Optional[int] = None,
-        caller_id: Optional[str] = None
+        caller_id: Optional[str] = None,
+        country_code: str = ''
     ) -> int:
         """Create new campaign linked to user's trunk and lead list"""
         async with self.pool.acquire() as conn:
             campaign_id = await conn.fetchval("""
-                INSERT INTO campaigns (user_id, name, trunk_id, lead_id, caller_id, status)
-                VALUES ($1, $2, $3, $4, $5, 'draft')
+                INSERT INTO campaigns (user_id, name, trunk_id, lead_id, caller_id, country_code, status)
+                VALUES ($1, $2, $3, $4, $5, $6, 'draft')
                 RETURNING id
-            """, user_id, name, trunk_id, lead_id, caller_id)
+            """, user_id, name, trunk_id, lead_id, caller_id, country_code)
             return campaign_id
     
     async def add_campaign_numbers(
