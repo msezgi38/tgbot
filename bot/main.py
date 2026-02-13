@@ -199,6 +199,7 @@ async def campaigns_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             row.append(InlineKeyboardButton(f"🛑 Stop", callback_data=f"stop_{camp['id']}"))
         elif camp.get('status') == 'paused':
             row.append(InlineKeyboardButton(f"▶️ Resume", callback_data=f"resume_{camp['id']}"))
+        row.append(InlineKeyboardButton(f"🗑️", callback_data=f"delete_{camp['id']}"))
         keyboard.append(row)
     
     keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")])
@@ -1405,18 +1406,13 @@ Total Calls: {user_data.get('total_calls', 0)}
             text += f"{emoji} <b>{camp['name']}</b>\n   📞 {camp.get('completed', 0)}/{camp.get('total_numbers', 0)} | 🔌 {trunk}\n\n"
             
             cid = camp['id']
+            row = [InlineKeyboardButton(f"📊 Details", callback_data=f"details_{cid}")]
             if camp.get('status') == 'running':
-                keyboard.append([
-                    InlineKeyboardButton(f"⏸️ Pause", callback_data=f"pause_{cid}"),
-                    InlineKeyboardButton(f"📊 Details", callback_data=f"details_{cid}")
-                ])
+                row.append(InlineKeyboardButton(f"� Stop", callback_data=f"stop_{cid}"))
             elif camp.get('status') == 'paused':
-                keyboard.append([
-                    InlineKeyboardButton(f"▶️ Resume", callback_data=f"resume_{cid}"),
-                    InlineKeyboardButton(f"📊 Details", callback_data=f"details_{cid}")
-                ])
-            else:
-                keyboard.append([InlineKeyboardButton(f"📊 {camp['name'][:25]}", callback_data=f"details_{cid}")])
+                row.append(InlineKeyboardButton(f"▶️ Resume", callback_data=f"resume_{cid}"))
+            row.append(InlineKeyboardButton(f"�️", callback_data=f"delete_{cid}"))
+            keyboard.append(row)
         
         keyboard.append([
             InlineKeyboardButton("🔄 Refresh", callback_data="menu_campaigns"),
@@ -1648,6 +1644,26 @@ async def handle_campaign_controls(update: Update, context: ContextTypes.DEFAULT
         
         await query.edit_message_text(
             f"⏸️ <b>Campaign #{campaign_id} Paused</b>\n\nUse /campaigns to resume.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 View Campaigns", callback_data="menu_campaigns")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
+        )
+    
+    elif data.startswith("delete_"):
+        campaign_id = int(data.replace("delete_", ""))
+        user = update.effective_user
+        user_data = await db.get_or_create_user(user.id)
+        
+        # Stop first if running
+        await db.stop_campaign(campaign_id)
+        # Delete campaign and all data
+        await db.delete_campaign(campaign_id, user_data['id'])
+        
+        await query.edit_message_text(
+            f"🗑️ <b>Campaign #{campaign_id} Deleted</b>\n\n"
+            f"All data has been removed.",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📊 View Campaigns", callback_data="menu_campaigns")],
@@ -1926,7 +1942,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_menu_callbacks, pattern="^menu_"))
     application.add_handler(CallbackQueryHandler(handle_voice_selection, pattern="^voice_"))
     application.add_handler(CallbackQueryHandler(handle_cid_callbacks, pattern="^(cid_|setcid_)"))
-    application.add_handler(CallbackQueryHandler(handle_campaign_controls, pattern="^(pause|resume|stop|details|logs)_"))
+    application.add_handler(CallbackQueryHandler(handle_campaign_controls, pattern="^(pause|resume|stop|delete|details|logs)_"))
     
     # Message handlers
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

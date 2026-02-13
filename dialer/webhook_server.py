@@ -14,11 +14,13 @@ from typing import Optional, Dict
 from decimal import Decimal
 
 import asyncpg
+import aiohttp
 from fastapi import FastAPI, Request
 import uvicorn
 
 from config import (
     DATABASE_URL,
+    TELEGRAM_BOT_TOKEN,
     WEBHOOK_HOST,
     WEBHOOK_PORT,
     MINIMUM_BILLABLE_SECONDS,
@@ -33,6 +35,46 @@ app = FastAPI(title="IVR Webhook Server")
 
 # Database connection pool
 db_pool: Optional[asyncpg.Pool] = None
+
+
+async def send_press1_notification(campaign_id: int, phone_number: str, duration: int, cost: float):
+    """Send Telegram notification when someone presses 1"""
+    try:
+        async with db_pool.acquire() as conn:
+            # Get campaign owner's telegram_id
+            row = await conn.fetchrow("""
+                SELECT u.telegram_id, c.name as campaign_name
+                FROM campaigns c
+                JOIN users u ON c.user_id = u.id
+                WHERE c.id = $1
+            """, campaign_id)
+            
+            if not row:
+                return
+            
+            telegram_id = row['telegram_id']
+            campaign_name = row['campaign_name']
+            
+            text = (
+                f"🔔 <b>Press-1 Alert!</b>\n\n"
+                f"📞 Number: <code>{phone_number}</code>\n"
+                f"📋 Campaign: {campaign_name}\n"
+                f"⏱ Duration: {duration}s\n"
+                f"💰 Cost: ${cost:.4f}\n\n"
+                f"✅ This person pressed 1!"
+            )
+            
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            async with aiohttp.ClientSession() as session:
+                await session.post(url, json={
+                    'chat_id': telegram_id,
+                    'text': text,
+                    'parse_mode': 'HTML'
+                })
+            
+            logger.info(f"🔔 Press-1 notification sent to {telegram_id} for {phone_number}")
+    except Exception as e:
+        logger.error(f"Failed to send press-1 notification: {e}")
 
 
 @app.on_event("startup")
@@ -138,6 +180,21 @@ async def handle_dtmf(request: Request):
                         SELECT user_id FROM campaigns WHERE id = $2
                     )
                 """, cost, campaign_id)
+        
+        # Send Telegram notification for press-1
+        if pressed_one:
+            try:
+                async with db_pool.acquire() as conn:
+                    phone_row = await conn.fetchrow(
+                        "SELECT phone_number FROM campaign_data WHERE id = $1",
+                        campaign_data_id
+                    )
+                    phone = phone_row['phone_number'] if phone_row else 'Unknown'
+                asyncio.create_task(
+                    send_press1_notification(campaign_id, phone, duration, float(cost))
+                )
+            except Exception as e:
+                logger.error(f"Error getting phone for notification: {e}")
         
         return {
             "status": "ok",

@@ -305,9 +305,11 @@ class Database:
     async def delete_lead_list(self, lead_id: int) -> bool:
         """Delete a lead list and all its numbers"""
         async with self.pool.acquire() as conn:
-            result = await conn.execute("""
-                DELETE FROM leads WHERE id = $1
-            """, lead_id)
+            async with conn.transaction():
+                # Delete lead numbers first (FK constraint)
+                await conn.execute("DELETE FROM lead_numbers WHERE lead_id = $1", lead_id)
+                # Delete the lead list
+                result = await conn.execute("DELETE FROM leads WHERE id = $1", lead_id)
             return 'DELETE 1' in result
     
     async def copy_leads_to_campaign(self, campaign_id: int, lead_id: int) -> int:
@@ -481,6 +483,21 @@ class Database:
                 SET status = 'paused'
                 WHERE id = $1
             """, campaign_id)
+            return True
+    
+    async def delete_campaign(self, campaign_id: int, user_id: int = None) -> bool:
+        """Delete a campaign and its data"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Delete campaign data (numbers)
+                await conn.execute("DELETE FROM campaign_data WHERE campaign_id = $1", campaign_id)
+                # Delete call records
+                await conn.execute("DELETE FROM calls WHERE campaign_id = $1", campaign_id)
+                # Delete campaign
+                if user_id:
+                    await conn.execute("DELETE FROM campaigns WHERE id = $1 AND user_id = $2", campaign_id, user_id)
+                else:
+                    await conn.execute("DELETE FROM campaigns WHERE id = $1", campaign_id)
             return True
     
     async def get_campaign(self, campaign_id: int) -> Optional[Dict]:
