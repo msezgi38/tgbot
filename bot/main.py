@@ -1511,16 +1511,28 @@ async def handle_trunk_callbacks(update: Update, context: ContextTypes.DEFAULT_T
     
     elif data.startswith("trunk_confirm_delete_"):
         trunk_id = int(data.replace("trunk_confirm_delete_", ""))
-        await db.delete_trunk(trunk_id)
-        
-        await query.edit_message_text(
-            "✅ Trunk deleted.",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
-                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
-            ])
-        )
+        try:
+            await db.delete_trunk(trunk_id)
+            
+            await query.edit_message_text(
+                "✅ Trunk deleted.",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                ])
+            )
+        except Exception as e:
+            logger.error(f"❌ Failed to delete trunk {trunk_id}: {e}")
+            await query.edit_message_text(
+                f"❌ <b>Failed to delete trunk</b>\n\n"
+                f"Error: {str(e)[:200]}",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                ])
+            )
 
 
 # =============================================================================

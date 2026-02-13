@@ -207,12 +207,18 @@ class Database:
             return True
     
     async def delete_trunk(self, trunk_id: int) -> bool:
-        """Delete a trunk"""
+        """Delete a trunk (nullifies campaign references first)"""
         async with self.pool.acquire() as conn:
-            result = await conn.execute("""
-                DELETE FROM user_trunks WHERE id = $1
-            """, trunk_id)
-            return 'DELETE 1' in result
+            async with conn.transaction():
+                # Nullify trunk reference in campaigns to avoid FK violation
+                await conn.execute("""
+                    UPDATE campaigns SET trunk_id = NULL WHERE trunk_id = $1
+                """, trunk_id)
+                # Now safely delete the trunk
+                result = await conn.execute("""
+                    DELETE FROM user_trunks WHERE id = $1
+                """, trunk_id)
+                return 'DELETE 1' in result
     
     async def get_active_trunks(self) -> List[Dict]:
         """Get all active trunks (for PJSIP config generation)"""
