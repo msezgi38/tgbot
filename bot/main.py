@@ -132,8 +132,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         started_str = started.strftime('%d/%m/%Y') if started else 'N/A'
         expires_str = active_sub['expires_at'].strftime('%d/%m/%Y')
         sub_info = (
-            f"\n\n\ud83d\udce6 <b>Subscription</b>\n"
-            f"\ud83d\udcc5 Purchased: {started_str}\n"
+            f"\n\n\U0001f4e6 <b>Subscription</b>\n"
+            f"\U0001f4c5 Purchased: {started_str}\n"
             f"\u23f3 Expires: {expires_str} (<b>{days_left} days left</b>)"
         )
     
@@ -598,6 +598,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         except ValueError:
             await update.message.reply_text("❌ Invalid ID. Enter a numeric Telegram user ID.", parse_mode='HTML')
+        return
+    
+    # --- Handle admin manual subscription grant ---
+    if context.user_data.get('awaiting_admin_grant'):
+        text = update.message.text.strip()
+        context.user_data['awaiting_admin_grant'] = False
+        
+        try:
+            target_tg_id = int(text)
+            result = await db.grant_subscription(target_tg_id)
+            
+            if result:
+                await update.message.reply_text(
+                    f"🎁 <b>Subscription Granted!</b>\n\n"
+                    f"User <code>{target_tg_id}</code> now has 30 days of access.\n"
+                    f"Expires: <b>{result['expires_at'].strftime('%Y-%m-%d')}</b>",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")]
+                    ])
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ User <code>{target_tg_id}</code> not found in database.\n"
+                    "The user must have started the bot at least once.",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")]
+                    ])
+                )
+        except ValueError:
+            await update.message.reply_text("❌ Invalid ID. Enter a numeric Telegram user ID.")
         return
     
     # --- Handle MagnusBilling top-up amount input ---
@@ -1287,8 +1319,8 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             started_str = started.strftime('%d/%m/%Y') if started else 'N/A'
             expires_str = active_sub['expires_at'].strftime('%d/%m/%Y')
             sub_info = (
-                f"\n\n\ud83d\udce6 <b>Subscription</b>\n"
-                f"\ud83d\udcc5 Purchased: {started_str}\n"
+                f"\n\n\U0001f4e6 <b>Subscription</b>\n"
+                f"\U0001f4c5 Purchased: {started_str}\n"
                 f"\u23f3 Expires: {expires_str} (<b>{days_left} days left</b>)"
             )
         
@@ -1393,6 +1425,9 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             ],
             [
                 InlineKeyboardButton("🔒 Freeze User Sub", callback_data="menu_admin_freeze"),
+                InlineKeyboardButton("🎁 Grant Sub", callback_data="menu_admin_grant")
+            ],
+            [
                 InlineKeyboardButton("📊 System Stats", callback_data="menu_admin_stats")
             ],
             [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
@@ -1434,6 +1469,18 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             "Example: <code>123456789</code>\n\n"
             "If user has active sub, it will be <b>frozen</b>.\n"
             "If user has frozen sub, it will be <b>unfrozen</b>.",
+            parse_mode='HTML'
+        )
+    
+    elif action == "admin_grant":
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        context.user_data['awaiting_admin_grant'] = True
+        await query.edit_message_text(
+            "🎁 <b>Grant Manual Subscription</b>\n\n"
+            "Enter the Telegram user ID to grant 1 month subscription:\n"
+            "Example: <code>123456789</code>\n\n"
+            "This will create/activate a 30-day subscription for the user.",
             parse_mode='HTML'
         )
     
@@ -2651,7 +2698,7 @@ async def post_shutdown(application):
     """Called on bot shutdown - cleanup resources"""
     await webhook_srv.stop()
     await db.close()
-    logger.info("\ud83d\udd34 Database and webhook server stopped")
+    logger.info("🔴 Database and webhook server stopped")
 
 
 def main():

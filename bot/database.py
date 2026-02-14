@@ -564,6 +564,32 @@ class Database:
             """, telegram_id)
             return row['status'] if row else None
     
+    async def grant_subscription(self, telegram_id: int, days: int = 30) -> Optional[Dict]:
+        """Admin: manually grant a subscription to a user"""
+        async with self.pool.acquire() as conn:
+            # Get user_id from telegram_id
+            user_row = await conn.fetchrow(
+                "SELECT id FROM users WHERE telegram_id = $1", telegram_id
+            )
+            if not user_row:
+                return None
+            
+            now = datetime.now()
+            expires = now + timedelta(days=days)
+            
+            sub_id = await conn.fetchval("""
+                INSERT INTO subscriptions (user_id, telegram_id, payment_track_id, amount, status, starts_at, expires_at)
+                VALUES ($1, $2, $3, 0, 'active', $4, $5)
+                RETURNING id
+            """, user_row['id'], telegram_id, f"manual_{telegram_id}_{int(now.timestamp())}", now, expires)
+            
+            logger.info(f"🎁 Manual subscription granted: user {telegram_id}, expires {expires}")
+            return {
+                'id': sub_id,
+                'telegram_id': telegram_id,
+                'expires_at': expires
+            }
+    
     # =========================================================================
     # Campaign Operations
     # =========================================================================
