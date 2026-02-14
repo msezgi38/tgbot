@@ -715,20 +715,13 @@ class Database:
             return dict(row) if row else None
     
     async def get_campaign_stats(self, campaign_id: int) -> Dict:
-        """Get campaign statistics"""
+        """Get campaign statistics - computed live from campaign_data and calls"""
         async with self.pool.acquire() as conn:
-            stats = await conn.fetchrow("""
+            # Get campaign info
+            campaign = await conn.fetchrow("""
                 SELECT
-                    c.name,
-                    c.total_numbers,
-                    c.completed,
-                    c.answered,
-                    c.pressed_one,
-                    c.failed,
-                    c.status,
-                    c.actual_cost,
-                    c.created_at,
-                    c.started_at,
+                    c.name, c.status, c.created_at, c.started_at,
+                    c.total_numbers, c.actual_cost,
                     ut.name as trunk_name,
                     l.list_name as lead_name
                 FROM campaigns c
@@ -737,7 +730,38 @@ class Database:
                 WHERE c.id = $1
             """, campaign_id)
             
-            return dict(stats) if stats else {}
+            if not campaign:
+                return {}
+            
+            result = dict(campaign)
+            
+            # Count live stats from campaign_data table
+            stats = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) FILTER (WHERE status NOT IN ('pending')) as completed,
+                    COUNT(*) FILTER (WHERE status = 'failed') as failed
+                FROM campaign_data
+                WHERE campaign_id = $1
+            """, campaign_id)
+            
+            # Count answered and pressed_one from calls table
+            call_stats = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) FILTER (WHERE status IN ('ANSWERED', 'COMPLETED')) as answered,
+                    COUNT(*) FILTER (WHERE pressed_one = true) as pressed_one,
+                    COALESCE(SUM(cost), 0) as total_cost
+                FROM calls
+                WHERE campaign_id = $1
+            """, campaign_id)
+            
+            result['completed'] = stats['completed'] if stats else 0
+            result['failed'] = stats['failed'] if stats else 0
+            result['answered'] = call_stats['answered'] if call_stats else 0
+            result['pressed_one'] = call_stats['pressed_one'] if call_stats else 0
+            if call_stats and call_stats['total_cost']:
+                result['actual_cost'] = float(call_stats['total_cost'])
+            
+            return result
     
     async def get_user_campaigns(self, user_id: int, limit: int = 10) -> List[Dict]:
         """Get user's campaigns"""
