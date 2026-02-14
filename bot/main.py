@@ -422,6 +422,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
         return
     
+    # --- Handle admin min top-up setting ---
+    if context.user_data.get('awaiting_admin_min_topup'):
+        text = update.message.text.strip().replace('$', '')
+        context.user_data['awaiting_admin_min_topup'] = False
+        
+        try:
+            new_min = float(text)
+            if new_min < 1:
+                await update.message.reply_text("❌ Minimum must be at least $1.")
+                return
+            bot_settings['min_topup'] = new_min
+            await update.message.reply_text(
+                f"✅ <b>Minimum top-up updated!</b>\n\nNew minimum: <b>${new_min:.2f}</b>",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                ])
+            )
+        except ValueError:
+            await update.message.reply_text("❌ Invalid number. Enter a valid amount like <code>50</code>", parse_mode='HTML')
+        return
+    
     # --- Handle MagnusBilling top-up amount input ---
     if context.user_data.get('awaiting_topup_amount'):
         text = update.message.text.strip().replace('$', '').replace(',', '')
