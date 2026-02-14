@@ -1495,7 +1495,7 @@ async def handle_trunk_callbacks(update: Update, context: ContextTypes.DEFAULT_T
                 logger.info(f"📞 MagnusBilling user created: {magnus_username} (ID: {mb_user_id})")
             
             # Save MagnusBilling info to our DB
-            await db.set_magnus_info(user.id, magnus_username, mb_user_id or 0)
+            await db.set_magnus_info(user.id, magnus_username, int(mb_user_id or 0))
             
             # Create trunk in our DB pointing to MagnusBilling
             trunk = await db.create_trunk(
