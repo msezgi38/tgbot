@@ -2451,8 +2451,7 @@ async def handle_subscribe_callbacks(update: Update, context: ContextTypes.DEFAU
         price = bot_settings['monthly_price']
         
         await query.edit_message_text(
-            f"\u23f3 Creating payment for <b>${price:.2f}</b>...\n"
-            "Please wait...",
+            f"⏳ Creating payment for <b>${price:.2f}</b>...\nPlease wait...",
             parse_mode='HTML'
         )
         
@@ -2486,17 +2485,17 @@ async def handle_subscribe_callbacks(update: Update, context: ContextTypes.DEFAU
                 )
                 
                 keyboard = [
-                    [InlineKeyboardButton("\ud83d\udcb3 Pay Now", url=payment_url)],
-                    [InlineKeyboardButton("\ud83d\udd04 Check Status", callback_data="sub_check_status")],
-                    [InlineKeyboardButton("\ud83d\udd19 Back", callback_data="menu_main")]
+                    [InlineKeyboardButton("💳 Pay Now", url=payment_url)],
+                    [InlineKeyboardButton("🔄 Check Status", callback_data="sub_check_status")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="menu_main")]
                 ]
                 
                 await query.edit_message_text(
-                    f"\ud83d\udce6 <b>Monthly Subscription</b>\n\n"
-                    f"\ud83d\udcb0 Amount: <b>${price:.2f} USDT</b>\n"
-                    f"\ud83d\udd17 Track ID: <code>{track_id}</code>\n\n"
+                    f"📦 <b>Monthly Subscription</b>\n\n"
+                    f"💰 Amount: <b>${price:.2f} USDT</b>\n"
+                    f"🔗 Track ID: <code>{track_id}</code>\n\n"
                     "Click the button below to pay:\n\n"
-                    "\u2139\ufe0f After payment, your subscription will be\n"
+                    "ℹ️ After payment, your subscription will be\n"
                     "activated automatically via webhook.\n"
                     "You can also tap 'Check Status' to verify.",
                     parse_mode='HTML',
@@ -2505,19 +2504,19 @@ async def handle_subscribe_callbacks(update: Update, context: ContextTypes.DEFAU
             else:
                 error_msg = result.get('message', 'Unknown error') if result else 'No response'
                 await query.edit_message_text(
-                    f"\u274c Payment creation failed: {error_msg}\n\n"
+                    f"❌ Payment creation failed: {error_msg}\n\n"
                     "Please try again later.",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("\ud83d\udd04 Try Again", callback_data="sub_subscribe")],
-                        [InlineKeyboardButton("\ud83d\udd19 Back", callback_data="menu_main")]
+                        [InlineKeyboardButton("🔄 Try Again", callback_data="sub_subscribe")],
+                        [InlineKeyboardButton("🔙 Back", callback_data="menu_main")]
                     ])
                 )
         except Exception as e:
             logger.error(f"Subscription payment error: {e}", exc_info=True)
             await query.edit_message_text(
-                f"\u274c Error: {str(e)[:200]}\n\nPlease try again.",
+                f"❌ Error: {str(e)[:200]}\n\nPlease try again.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("\ud83d\udd04 Try Again", callback_data="sub_subscribe")]
+                    [InlineKeyboardButton("🔄 Try Again", callback_data="sub_subscribe")]
                 ])
             )
     
@@ -2527,13 +2526,13 @@ async def handle_subscribe_callbacks(update: Update, context: ContextTypes.DEFAU
         if active_sub:
             days_left = (active_sub['expires_at'] - datetime.now()).days
             await query.edit_message_text(
-                f"\u2705 <b>Subscription Active!</b>\n\n"
-                f"\ud83d\udce6 Expires: <b>{active_sub['expires_at'].strftime('%Y-%m-%d')}</b>\n"
-                f"\u23f3 Days left: <b>{days_left}</b>\n\n"
+                f"✅ <b>Subscription Active!</b>\n\n"
+                f"📦 Expires: <b>{active_sub['expires_at'].strftime('%Y-%m-%d')}</b>\n"
+                f"⏳ Days left: <b>{days_left}</b>\n\n"
                 "Tap Main Menu to access all features.",
                 parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("\ud83c\udfe0 Main Menu", callback_data="menu_main")]
+                    [InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")]
                 ])
             )
         else:
@@ -2556,12 +2555,12 @@ async def handle_subscribe_callbacks(update: Update, context: ContextTypes.DEFAU
                             result = await db.activate_subscription(track_id)
                             if result:
                                 await query.edit_message_text(
-                                    f"\u2705 <b>Payment Confirmed & Subscription Activated!</b>\n\n"
-                                    f"\ud83d\udce6 Valid until: <b>{result['expires_at'].strftime('%Y-%m-%d')}</b>\n\n"
+                                    f"✅ <b>Payment Confirmed & Subscription Activated!</b>\n\n"
+                                    f"📦 Valid until: <b>{result['expires_at'].strftime('%Y-%m-%d')}</b>\n\n"
                                     "Tap Main Menu to access all features.",
                                     parse_mode='HTML',
                                     reply_markup=InlineKeyboardMarkup([
-                                        [InlineKeyboardButton("\ud83c\udfe0 Main Menu", callback_data="menu_main")]
+                                        [InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")]
                                     ])
                                 )
                                 return
@@ -2569,29 +2568,29 @@ async def handle_subscribe_callbacks(update: Update, context: ContextTypes.DEFAU
                         logger.warning(f"Failed to check payment status: {e}")
                     
                     await query.edit_message_text(
-                        f"\u23f3 <b>Payment Pending</b>\n\n"
+                        f"⏳ <b>Payment Pending</b>\n\n"
                         f"Track ID: <code>{track_id}</code>\n"
                         "Your payment has not been confirmed yet.\n"
                         "Please complete the payment or wait for confirmation.",
                         parse_mode='HTML',
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("\ud83d\udd04 Check Again", callback_data="sub_check_status")],
-                            [InlineKeyboardButton("\ud83d\udce6 New Payment", callback_data="sub_subscribe")]
+                            [InlineKeyboardButton("🔄 Check Again", callback_data="sub_check_status")],
+                            [InlineKeyboardButton("📦 New Payment", callback_data="sub_subscribe")]
                         ])
                     )
                 else:
                     await query.edit_message_text(
-                        "\u274c <b>No Active Subscription</b>\n\n"
+                        "❌ <b>No Active Subscription</b>\n\n"
                         "You don't have an active subscription.\n"
                         "Subscribe to access all features.",
                         parse_mode='HTML',
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton(f"\ud83d\udce6 Subscribe (${bot_settings['monthly_price']:.2f}/mo)", callback_data="sub_subscribe")]
+                            [InlineKeyboardButton(f"📦 Subscribe (${bot_settings['monthly_price']:.2f}/mo)", callback_data="sub_subscribe")]
                         ])
                     )
             except Exception as e:
                 logger.error(f"Sub status check error: {e}")
-                await query.edit_message_text(f"\u274c Error checking status: {str(e)[:200]}")
+                await query.edit_message_text(f"❌ Error checking status: {str(e)[:200]}")
 
 
 # =============================================================================
