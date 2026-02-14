@@ -40,6 +40,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Runtime bot settings (admin-configurable)
+bot_settings = {
+    'min_topup': MIN_TOPUP_AMOUNT,  # Default from config, admin can change
+}
+
 
 
 async def regenerate_pjsip() -> str:
@@ -434,9 +439,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        if amount < MIN_TOPUP_AMOUNT:
+        if amount < bot_settings['min_topup']:
             await update.message.reply_text(
-                f"❌ Minimum top-up is <b>${MIN_TOPUP_AMOUNT}</b>.\nYou entered: ${amount:.2f}",
+                f"❌ Minimum top-up is <b>${bot_settings['min_topup']}</b>.\nYou entered: ${amount:.2f}",
                 parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("💳 Try Again", callback_data="mb_add_credit")],
@@ -1115,7 +1120,7 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
         admin_text = (
             "🛡️ <b>Admin Panel</b>\n\n"
             f"👥 Total Users: <b>{user_count}</b>\n"
-            f"📦 Credit Packages: <b>{len(CREDIT_PACKAGES)}</b>\n\n"
+            f"💵 Min Top-up: <b>${bot_settings['min_topup']}</b>\n\n"
             "Select an option:"
         )
         
@@ -1125,12 +1130,25 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
                 InlineKeyboardButton("💰 Manage Prices", callback_data="menu_admin_prices")
             ],
             [
+                InlineKeyboardButton("💵 Set Min Top-up", callback_data="menu_admin_min_topup"),
                 InlineKeyboardButton("📊 System Stats", callback_data="menu_admin_stats")
             ],
             [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
         ]
         
         await query.edit_message_text(admin_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif action == "admin_min_topup":
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        context.user_data['awaiting_admin_min_topup'] = True
+        await query.edit_message_text(
+            f"💵 <b>Set Minimum Top-up Amount</b>\n\n"
+            f"Current: <b>${bot_settings['min_topup']}</b>\n\n"
+            f"Enter new minimum amount in USD:\n"
+            f"Example: <code>50</code> or <code>100</code>",
+            parse_mode='HTML'
+        )
     
     elif action == "admin_users":
         if user.id not in ADMIN_TELEGRAM_IDS:
@@ -1743,7 +1761,7 @@ async def handle_mb_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text(
             f"💳 <b>Add Credit to SIP Account</b>\n\n"
             f"Account: <code>{mb_username}</code>\n\n"
-            f"Enter the amount in USD (minimum ${MIN_TOPUP_AMOUNT}):\n"
+            f"Enter the amount in USD (minimum ${bot_settings['min_topup']}):\n"
             f"Example: <code>50</code> or <code>100</code>",
             parse_mode='HTML'
         )

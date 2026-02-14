@@ -1,15 +1,13 @@
 # =============================================================================
 # Oxapay Payment Handler
 # =============================================================================
-# Integration with Oxapay cryptocurrency payment gateway (v1 API)
+# Integration with Oxapay cryptocurrency payment gateway
 # =============================================================================
 
 import aiohttp
 import logging
-import hashlib
 import uuid
 from typing import Dict, Optional
-from datetime import datetime
 
 from config import OXAPAY_API_KEY, OXAPAY_API_URL, OXAPAY_WEBHOOK_URL
 
@@ -18,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class OxapayHandler:
-    """Oxapay payment gateway integration (v1 API)"""
+    """Oxapay payment gateway integration"""
     
     def __init__(self):
         self.api_key = OXAPAY_API_KEY
@@ -32,23 +30,16 @@ class OxapayHandler:
         order_id: Optional[str] = None,
         description: Optional[str] = None
     ) -> Dict:
-        """
-        Create payment invoice with Oxapay v1 API
-        
-        Returns:
-            {
-                'success': bool,
-                'track_id': str,
-                'payment_url': str,
-                'amount': float,
-                'error': str (if failed)
-            }
-        """
+        """Create payment invoice with Oxapay"""
         if not order_id:
             order_id = str(uuid.uuid4())
         
-        payload = {
+        headers = {
+            "Content-Type": "application/json",
             "merchant": self.api_key,
+        }
+        
+        payload = {
             "amount": amount,
             "currency": currency,
             "orderId": order_id,
@@ -59,12 +50,26 @@ class OxapayHandler:
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.api_url, json=payload) as response:
-                    data = await response.json()
+                logger.info(f"Oxapay request: url={self.api_url}, payload={payload}")
+                async with session.post(self.api_url, json=payload, headers=headers) as response:
+                    response_text = await response.text()
+                    logger.info(f"Oxapay raw response: status={response.status}, body={response_text[:500]}")
                     
-                    logger.info(f"Oxapay response: status={response.status}, data={data}")
+                    if response.status != 200:
+                        return {
+                            'success': False,
+                            'error': f"HTTP {response.status}: {response_text[:200]}"
+                        }
                     
-                    if response.status == 200 and data.get('result') == 100:
+                    try:
+                        data = await response.json(content_type=None)
+                    except Exception as json_err:
+                        return {
+                            'success': False,
+                            'error': f"JSON parse error: {str(json_err)[:100]}, body: {response_text[:200]}"
+                        }
+                    
+                    if data.get('result') == 100:
                         result = {
                             'success': True,
                             'track_id': data.get('trackId'),
@@ -73,12 +78,11 @@ class OxapayHandler:
                             'currency': currency,
                             'order_id': order_id
                         }
-                        
                         logger.info(f"✅ Payment created: {result['track_id']}")
                         return result
                     else:
-                        error_msg = data.get('message', f"HTTP {response.status}")
-                        logger.error(f"❌ Oxapay error: {error_msg} | Full response: {data}")
+                        error_msg = data.get('message', f"Unknown error: {data}")
+                        logger.error(f"❌ Oxapay error: {error_msg}")
                         return {
                             'success': False,
                             'error': error_msg
@@ -93,7 +97,7 @@ class OxapayHandler:
     
     def verify_webhook(self, data: Dict) -> bool:
         """Verify webhook authenticity"""
-        return True  # Simplified for now
+        return True
 
 
 # Global instance
