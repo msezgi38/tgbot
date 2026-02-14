@@ -597,6 +597,7 @@ class Database:
                 SELECT s.*, u.telegram_id as tg_id, u.username, u.first_name
                 FROM subscriptions s
                 JOIN users u ON u.id = s.user_id
+                WHERE s.status IN ('active', 'frozen') AND s.expires_at > NOW()
                 ORDER BY s.created_at DESC
                 LIMIT 50
             """)
