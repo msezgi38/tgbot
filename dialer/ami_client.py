@@ -22,6 +22,7 @@ class AsteriskAMIClient:
     def __init__(self):
         self.manager: Optional[Manager] = None
         self.connected = False
+        self.db_pool = None  # Set by campaign_worker for event handlers
         
     async def connect(self):
         """Establish connection to Asterisk AMI"""
@@ -127,16 +128,84 @@ class AsteriskAMIClient:
             return None
     
     async def on_hangup(self, manager, event):
-        """Handle Hangup events"""
+        """Handle Hangup events - update campaign_data and calls"""
         call_id = event.get('Uniqueid', '')
         cause = event.get('Cause-txt', 'Unknown')
+        cause_code = event.get('Cause', '')
+        duration = int(event.get('Duration', 0) or 0)
+        
         logger.info(f"📴 Call {call_id} hung up - Cause: {cause}")
+        
+        if self.db_pool and call_id:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    # Get the campaign_data_id from calls table
+                    call_row = await conn.fetchrow("""
+                        SELECT campaign_data_id, campaign_id FROM calls
+                        WHERE call_id = $1
+                    """, call_id)
+                    
+                    if call_row:
+                        # Update calls table
+                        await conn.execute("""
+                            UPDATE calls
+                            SET status = $1, hangup_cause = $2,
+                                duration = $3, ended_at = NOW()
+                            WHERE call_id = $4
+                        """, cause or 'HANGUP', cause, duration, call_id)
+                        
+                        # Update campaign_data status based on hangup cause
+                        # Normal hangup (cause 16) = completed, everything else = failed
+                        data_status = 'completed' if cause_code in ('16', '') else 'failed'
+                        await conn.execute("""
+                            UPDATE campaign_data
+                            SET status = $1
+                            WHERE id = $2 AND status = 'dialing'
+                        """, data_status, call_row['campaign_data_id'])
+                        
+                        logger.info(f"✅ Call {call_id} → campaign_data status: {data_status}")
+            except Exception as e:
+                logger.error(f"❌ Error updating hangup for {call_id}: {e}")
     
     async def on_dial_end(self, manager, event):
-        """Handle DialEnd events"""
+        """Handle DialEnd events - update call answer status"""
         call_id = event.get('Uniqueid', '')
-        status = event.get('DialStatus', 'Unknown')
-        logger.info(f"📊 Dial ended for {call_id} - Status: {status}")
+        dial_status = event.get('DialStatus', 'Unknown')
+        
+        logger.info(f"📊 Dial ended for {call_id} - Status: {dial_status}")
+        
+        if self.db_pool and call_id:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    # Map Asterisk DialStatus to our call status
+                    status_map = {
+                        'ANSWER': 'ANSWER',
+                        'BUSY': 'BUSY',
+                        'NOANSWER': 'NO ANSWER',
+                        'CANCEL': 'CANCEL',
+                        'CONGESTION': 'CONGESTION',
+                        'CHANUNAVAIL': 'FAILED',
+                    }
+                    call_status = status_map.get(dial_status, dial_status)
+                    
+                    await conn.execute("""
+                        UPDATE calls
+                        SET status = $1, answered_at = CASE WHEN $1 = 'ANSWER' THEN NOW() ELSE NULL END
+                        WHERE call_id = $2
+                    """, call_status, call_id)
+                    
+                    # If not answered, mark campaign_data as completed immediately
+                    if dial_status != 'ANSWER':
+                        await conn.execute("""
+                            UPDATE campaign_data
+                            SET status = 'completed'
+                            WHERE id = (
+                                SELECT campaign_data_id FROM calls WHERE call_id = $1
+                            ) AND status = 'dialing'
+                        """, call_id)
+                        logger.info(f"📞 {call_id} not answered ({dial_status}) → slot freed")
+            except Exception as e:
+                logger.error(f"❌ Error updating dial_end for {call_id}: {e}")
     
     async def get_active_channels(self) -> int:
         """Get count of active channels"""

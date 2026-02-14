@@ -47,6 +47,9 @@ class CampaignWorker:
         )
         logger.info("✅ Database connected")
         
+        # Share db_pool with AMI client for event handlers
+        self.ami_client.db_pool = self.db_pool
+        
         # Connect to Asterisk AMI
         connected = await self.ami_client.connect()
         if not connected:
@@ -148,10 +151,22 @@ class CampaignWorker:
         campaign_cps = campaign.get('cps', MAX_CONCURRENT_CALLS)
         campaign_semaphore = asyncio.Semaphore(campaign_cps)
         
-        # Fetch pending numbers (batch size = CPS)
-        numbers = await self.get_pending_numbers(campaign_id, limit=campaign_cps)
+        # Count currently active (dialing) calls for this campaign
+        active_dialing = await self.get_active_dialing_count(campaign_id)
+        available_slots = campaign_cps - active_dialing
+        
+        if available_slots <= 0:
+            logger.info(f"⏳ Campaign {campaign_id}: {active_dialing} calls active, waiting (CPS={campaign_cps})")
+            return
+        
+        # Fetch pending numbers (only as many as available slots)
+        numbers = await self.get_pending_numbers(campaign_id, limit=available_slots)
         
         if not numbers:
+            # Check if there are still dialing calls in progress
+            if active_dialing > 0:
+                logger.info(f"⏳ Campaign {campaign_id}: no pending numbers, {active_dialing} calls still active")
+                return
             logger.info(f"✅ Campaign {campaign_id} completed")
             await self.complete_campaign(campaign_id)
             return
@@ -173,18 +188,31 @@ class CampaignWorker:
         await asyncio.gather(*tasks, return_exceptions=True)
     
     async def get_pending_numbers(self, campaign_id: int, limit: int = 10) -> List[Dict]:
-        """Fetch pending phone numbers for a campaign"""
+        """Fetch pending phone numbers for a campaign (deduplicated)"""
         async with self.db_pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT id, phone_number
+                SELECT DISTINCT ON (phone_number) id, phone_number
                 FROM campaign_data
                 WHERE campaign_id = $1
                 AND status = 'pending'
-                ORDER BY id ASC
+                AND phone_number NOT IN (
+                    SELECT phone_number FROM campaign_data
+                    WHERE campaign_id = $1 AND status = 'dialing'
+                )
+                ORDER BY phone_number, id ASC
                 LIMIT $2
             """, campaign_id, limit)
             
             return [dict(row) for row in rows]
+    
+    async def get_active_dialing_count(self, campaign_id: int) -> int:
+        """Count how many numbers are currently being dialed for a campaign"""
+        async with self.db_pool.acquire() as conn:
+            count = await conn.fetchval("""
+                SELECT COUNT(*) FROM campaign_data
+                WHERE campaign_id = $1 AND status = 'dialing'
+            """, campaign_id)
+            return count or 0
     
     async def dial_number(
         self,
