@@ -198,14 +198,50 @@ class MagnusBillingClient:
         return result
 
     async def update_callerid(self, user_id: int, callerid: str) -> dict:
-        """Update user's caller ID"""
+        """Update SIP account caller ID (via sip module, like PHP update_sip_user.php)"""
+        # First get the SIP account ID for this user
+        sip_id = await self.get_sip_id(user_id)
+        if not sip_id:
+            return {"success": False, "error": "SIP account not found for this user"}
+        
         result = await self._query({
-            'module': 'user',
+            'module': 'sip',
             'action': 'save',
-            'id': user_id,
-            'callingcard_pin': callerid,
+            'id': sip_id,
+            'callerid': callerid,
         })
-        logger.info(f"📞 MagnusBilling update_callerid(user_id={user_id}, cid={callerid}): {result}")
+        logger.info(f"📞 MagnusBilling update_callerid(sip_id={sip_id}, cid={callerid}): {result}")
+        return result
+
+    async def get_sip_id(self, user_id: int) -> int:
+        """Get SIP account ID for a MagnusBilling user"""
+        filter_data = json.dumps([{
+            "type": "numeric",
+            "field": "id_user",
+            "value": user_id,
+            "comparison": "eq"
+        }])
+        
+        result = await self._query({
+            'module': 'sip',
+            'action': 'read',
+            'page': 1,
+            'start': 0,
+            'limit': 1,
+            'filter': filter_data,
+        })
+        
+        if result.get('rows') and len(result['rows']) > 0:
+            return result['rows'][0]['id']
+        return None
+
+    async def update_sip(self, sip_id: int, data: dict) -> dict:
+        """Update SIP account fields (name, defaultuser, callerid, host, secret)"""
+        data['module'] = 'sip'
+        data['action'] = 'save'
+        data['id'] = sip_id
+        result = await self._query(data)
+        logger.info(f"📞 MagnusBilling update_sip(sip_id={sip_id}): {result}")
         return result
 
     # =========================================================================

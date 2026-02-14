@@ -1045,7 +1045,7 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
                 InlineKeyboardButton("📋 My Leads", callback_data="menu_leads")
             ],
             [
-                InlineKeyboardButton("🔧 Configure CID", callback_data="menu_configure_cid"),
+                InlineKeyboardButton("📞 SIP Account", callback_data="menu_trunks"),
                 InlineKeyboardButton("📊 Live Statistics", callback_data="menu_statistics")
             ],
             [
@@ -1387,25 +1387,11 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
         await query.edit_message_text(leads_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
     
     elif action == "configure_cid":
-        current_cid = user_data.get('caller_id', 'Not Set')
-        
-        cid_text = f"""
-🔧 <b>Caller ID Management</b>
-
-<b>Current CID:</b> {current_cid}
-
-<b>Options:</b>
-• Preset CIDs - Verified, high-performance numbers
-• Custom CID - Use your own number
-"""
-        
-        keyboard = [
-            [InlineKeyboardButton("📋 Preset CIDs", callback_data="cid_preset")],
-            [InlineKeyboardButton("✏️ Custom CID", callback_data="cid_custom")],
-            [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
-        ]
-        
-        await query.edit_message_text(cid_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+        # Redirect to SIP Account management (CID is managed there now)
+        # Re-trigger the trunks action
+        query.data = "menu_trunks"
+        await handle_menu_callbacks(update, context)
+        return
     
     elif action == "statistics":
         campaigns = await db.get_user_campaigns(user_data['id'], limit=5)
@@ -1790,10 +1776,13 @@ async def handle_mb_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             if plans:
                 for plan in plans:
+                    # Only show plans with signup enabled
+                    signup = str(plan.get('signup', '0'))
+                    if signup not in ('1', 'yes', 'true'):
+                        continue
                     plan_id = plan.get('id')
                     plan_name = plan.get('name', 'Unknown')
-                    # Only show plans (filter for IVR-related if name contains IVR)
-                    text += f"• <b>{plan_name}</b> (ID: {plan_id})\n"
+                    text += f"• <b>{plan_name}</b>\n"
                     keyboard.append([
                         InlineKeyboardButton(f"📋 {plan_name}", callback_data=f"mb_setplan_{plan_id}")
                     ])
