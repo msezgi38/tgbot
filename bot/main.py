@@ -2416,7 +2416,7 @@ async def handle_campaign_controls(update: Update, context: ContextTypes.DEFAULT
         
         text = f"📝 <b>Call Logs</b> (Last {len(logs)})\n\n"
         for log in logs[:10]:
-            emoji = "✅" if log.get('pressed_one') else ("📞" if log.get('answered') else "❌")
+            emoji = "✅" if log.get('dtmf_pressed') else ("📞" if log.get('status') in ('ANSWER', 'ANSWERED', 'COMPLETED') else "❌")
             text += f"{emoji} {log.get('phone_number', 'N/A')} | {log.get('duration', 0)}s | ${log.get('cost', 0):.2f}\n"
         
         await query.edit_message_text(

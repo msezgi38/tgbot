@@ -747,8 +747,8 @@ class Database:
             # Count answered and pressed_one from calls table
             call_stats = await conn.fetchrow("""
                 SELECT
-                    COUNT(*) FILTER (WHERE status IN ('ANSWERED', 'COMPLETED')) as answered,
-                    COUNT(*) FILTER (WHERE pressed_one = true) as pressed_one,
+                    COUNT(*) FILTER (WHERE status IN ('ANSWER', 'ANSWERED', 'COMPLETED')) as answered,
+                    COUNT(*) FILTER (WHERE dtmf_pressed > 0) as pressed_one,
                     COALESCE(SUM(cost), 0) as total_cost
                 FROM calls
                 WHERE campaign_id = $1
