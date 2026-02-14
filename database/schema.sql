@@ -34,6 +34,8 @@ CREATE TABLE users (
     total_calls INTEGER DEFAULT 0,                    -- Total calls made
     caller_id VARCHAR(50),                            -- Default Caller ID
     country_code VARCHAR(10) DEFAULT '+1',            -- Default country code
+    magnus_username VARCHAR(255),                     -- MagnusBilling SIP username
+    magnus_user_id INTEGER,                           -- MagnusBilling user ID
     is_active BOOLEAN DEFAULT TRUE,                   -- Account status
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP

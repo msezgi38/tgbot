@@ -28,6 +28,7 @@ from config import TELEGRAM_BOT_TOKEN, CREDIT_PACKAGES, ADMIN_TELEGRAM_IDS, TEST
 from database import db
 from oxapay_handler import oxapay
 from ui_components import ui
+from magnus_client import magnus
 
 # Add dialer directory to path for PJSIPGenerator import
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dialer'))
@@ -418,61 +419,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Send a valid price (e.g. 25.00)")
         return
     
-    # --- Handle SIP trunk creation input ---
-    if context.user_data.get('awaiting_trunk_input'):
-        step = context.user_data.get('trunk_step', 'name')
-        text = update.message.text.strip()
-        
-        if step == 'name':
-            context.user_data['trunk_name'] = text
-            context.user_data['trunk_step'] = 'host'
-            await update.message.reply_text("🔌 <b>SIP Host</b>\n\nEnter the SIP server hostname/IP:\n\nExample: sip.provider.com", parse_mode='HTML')
-        
-        elif step == 'host':
-            context.user_data['trunk_host'] = text
-            context.user_data['trunk_step'] = 'username'
-            await update.message.reply_text("🔌 <b>SIP Username</b>\n\nEnter SIP authentication username:", parse_mode='HTML')
-        
-        elif step == 'username':
-            context.user_data['trunk_username'] = text
-            context.user_data['trunk_step'] = 'password'
-            await update.message.reply_text("🔌 <b>SIP Password</b>\n\nEnter SIP authentication password:", parse_mode='HTML')
-        
-        elif step == 'password':
-            # All trunk info collected, create trunk
-            user_data = await db.get_or_create_user(user.id)
-            trunk = await db.create_trunk(
-                user_id=user_data['id'],
-                name=context.user_data.get('trunk_name', 'My Trunk'),
-                sip_host=context.user_data.get('trunk_host', ''),
-                sip_username=context.user_data.get('trunk_username', ''),
-                sip_password=text,
-            )
-            
-            # Clear state
-            context.user_data['awaiting_trunk_input'] = False
-            context.user_data.pop('trunk_step', None)
-            context.user_data.pop('trunk_name', None)
-            context.user_data.pop('trunk_host', None)
-            context.user_data.pop('trunk_username', None)
-            
-            # Auto-regenerate PJSIP config and reload Asterisk
-            reload_status = await regenerate_pjsip()
-            
-            await update.message.reply_text(
-                f"✅ <b>Trunk Created!</b>\n\n"
-                f"📛 Name: {trunk['name']}\n"
-                f"🌐 Host: {trunk['sip_host']}\n"
-                f"👤 User: {trunk['sip_username']}\n"
-                f"🔗 Endpoint: <code>{trunk['pjsip_endpoint_name']}</code>"
-                f"{reload_status}",
-                parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
-                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
-                ])
-            )
-        return
+    # --- SIP trunk creation is now automatic via MagnusBilling ---
+    # Manual trunk input flow removed - handled by trunk_auto_create callback
     
     # --- Handle lead list name input ---
     if context.user_data.get('awaiting_lead_name'):
@@ -1300,8 +1248,9 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
         await query.edit_message_text(buy_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
     
     elif action == "trunks":
-        # SIP Trunk Management
+        # SIP Trunk Management - Auto-provisioned via MagnusBilling
         trunks = await db.get_user_trunks(user_data['id'])
+        magnus_info = await db.get_magnus_info(user.id)
         
         trunks_text = "🔌 <b>My SIP Trunks</b>\n\n"
         
@@ -1315,11 +1264,15 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
                     f"   🔗 <code>{trunk['pjsip_endpoint_name']}</code>\n\n"
                 )
         else:
-            trunks_text += "No trunks configured yet.\n\nAdd your first SIP trunk to start making calls!\n"
+            trunks_text += "No SIP account yet.\n\nGet your SIP account to start making calls!\n"
         
-        keyboard = [
-            [InlineKeyboardButton("➕ Add New Trunk", callback_data="trunk_add")],
-        ]
+        keyboard = []
+        
+        if not magnus_info or not magnus_info.get('magnus_username'):
+            keyboard.append([InlineKeyboardButton("📞 Get SIP Account", callback_data="trunk_auto_create")])
+        else:
+            if not trunks:
+                keyboard.append([InlineKeyboardButton("📞 Activate SIP Account", callback_data="trunk_auto_create")])
         
         if trunks:
             for trunk in trunks:
@@ -1499,17 +1452,87 @@ async def handle_trunk_callbacks(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
     user = update.effective_user
     
-    if data == "trunk_add":
-        # Start trunk creation flow
-        context.user_data['awaiting_trunk_input'] = True
-        context.user_data['trunk_step'] = 'name'
-        
+    if data == "trunk_auto_create":
+        # Auto-create SIP account via MagnusBilling API
         await query.edit_message_text(
-            "🔌 <b>Add New SIP Trunk</b>\n\n"
-            "Step 1: Enter a name for this trunk\n\n"
-            "Example: MagnusBilling Main",
+            "⏳ <b>Creating your SIP account...</b>\n\nPlease wait.",
             parse_mode='HTML'
         )
+        
+        try:
+            user_data = await db.get_or_create_user(user.id)
+            magnus_username = f"tgbot_{user.id}"
+            import secrets
+            magnus_password = secrets.token_hex(8)  # 16 char random password
+            
+            # Check if already exists in MagnusBilling
+            existing = await magnus.get_user_by_username(magnus_username)
+            
+            if existing.get('rows') and len(existing['rows']) > 0:
+                # User already exists, get their info
+                mb_user = existing['rows'][0]
+                mb_user_id = mb_user['id']
+                magnus_password = mb_user.get('password', magnus_password)
+                logger.info(f"📞 MagnusBilling user already exists: {magnus_username}")
+            else:
+                # Create new user in MagnusBilling
+                result = await magnus.create_user(
+                    username=magnus_username,
+                    password=magnus_password,
+                    credit=0,
+                    firstname=user.first_name or f"TGBot User {user.id}"
+                )
+                
+                if not result.get('success', False):
+                    raise Exception(f"MagnusBilling API error: {result}")
+                
+                mb_user_id = result.get('rows', [{}])[0].get('id') if result.get('rows') else None
+                
+                if not mb_user_id:
+                    # Try to get the ID by reading back
+                    mb_user_id = await magnus.get_user_id(magnus_username)
+                
+                logger.info(f"📞 MagnusBilling user created: {magnus_username} (ID: {mb_user_id})")
+            
+            # Save MagnusBilling info to our DB
+            await db.set_magnus_info(user.id, magnus_username, mb_user_id or 0)
+            
+            # Create trunk in our DB pointing to MagnusBilling
+            trunk = await db.create_trunk(
+                user_id=user_data['id'],
+                name=f"MagnusBilling",
+                sip_host='64.95.13.23',
+                sip_username=magnus_username,
+                sip_password=magnus_password,
+            )
+            
+            # Regenerate PJSIP config
+            reload_status = await regenerate_pjsip()
+            
+            await query.edit_message_text(
+                f"✅ <b>SIP Account Created!</b>\n\n"
+                f"📛 Username: <code>{magnus_username}</code>\n"
+                f"🌐 Host: 64.95.13.23\n"
+                f"🔗 Endpoint: <code>{trunk['pjsip_endpoint_name']}</code>"
+                f"{reload_status}",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                ])
+            )
+        except Exception as e:
+            logger.error(f"❌ MagnusBilling auto-create failed: {e}")
+            await query.edit_message_text(
+                f"❌ <b>Failed to create SIP account</b>\n\n"
+                f"Error: {str(e)[:200]}\n\n"
+                f"Please contact support.",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                ])
+            )
     
     elif data.startswith("trunk_delete_"):
         trunk_id = int(data.replace("trunk_delete_", ""))

@@ -74,6 +74,22 @@ class Database:
             logger.info(f"👤 New user created: {telegram_id} ({username})")
             return dict(user)
     
+    async def set_magnus_info(self, telegram_id: int, magnus_username: str, magnus_user_id: int):
+        """Save MagnusBilling user mapping"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE users SET magnus_username = $1, magnus_user_id = $2
+                WHERE telegram_id = $3
+            """, magnus_username, magnus_user_id, telegram_id)
+    
+    async def get_magnus_info(self, telegram_id: int) -> dict:
+        """Get MagnusBilling user info for a telegram user"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT magnus_username, magnus_user_id FROM users WHERE telegram_id = $1
+            """, telegram_id)
+            return dict(row) if row else None
+    
     async def get_all_users(self) -> List[Dict]:
         """Get all registered users for admin view"""
         async with self.pool.acquire() as conn:

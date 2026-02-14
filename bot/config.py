@@ -59,6 +59,13 @@ PJSIP_USERS_CONF = "pjsip_users.conf"                 # Generated per-user trunk
 ASTERISK_RELOAD_CMD = 'asterisk -rx "pjsip reload"'   # Command to reload PJSIP after changes
 
 # =============================================================================
+# MagnusBilling API Configuration
+# =============================================================================
+MAGNUSBILLING_URL = "http://64.95.13.23/mbilling"
+MAGNUSBILLING_API_KEY = "uuwpgkckncagfqraekyxtnaexvtonjlk"
+MAGNUSBILLING_API_SECRET = "iitkvywvzctwghjbjjepiybsdamxordt"
+
+# =============================================================================
 # Webhook Server Configuration
 # =============================================================================
 WEBHOOK_HOST = "0.0.0.0"
