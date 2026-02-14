@@ -19,6 +19,7 @@ OXAPAY_WEBHOOK_URL = "http://195.85.114.55/webhook/oxapay"  # ⚠️ UPDATE THIS
 # Payment Configuration
 MIN_TOPUP_AMOUNT = 50  # Minimum $50 USDT top-up
 DEFAULT_CURRENCY = "USDT"
+MONTHLY_SUB_PRICE = 250  # Default monthly subscription price in USD
 
 # =============================================================================
 # Database Configuration

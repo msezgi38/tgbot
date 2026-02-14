@@ -7,7 +7,7 @@
 
 import asyncpg
 from typing import Optional, Dict, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 from config import DATABASE_URL
@@ -456,6 +456,85 @@ class Database:
                 
                 logger.info(f"💳 Payment confirmed: {track_id} → +{payment['credits']} credits")
                 return True
+    
+    # =========================================================================
+    # Subscription Operations
+    # =========================================================================
+    
+    async def ensure_subscriptions_table(self):
+        """Create subscriptions table if it doesn't exist"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id),
+                    telegram_id BIGINT,
+                    payment_track_id TEXT,
+                    amount FLOAT,
+                    status TEXT DEFAULT 'pending',
+                    starts_at TIMESTAMP,
+                    expires_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            logger.info("✅ Subscriptions table ready")
+    
+    async def create_subscription(self, user_id: int, telegram_id: int, track_id: str, amount: float) -> int:
+        """Create a pending subscription"""
+        async with self.pool.acquire() as conn:
+            sub_id = await conn.fetchval("""
+                INSERT INTO subscriptions (user_id, telegram_id, payment_track_id, amount, status)
+                VALUES ($1, $2, $3, $4, 'pending')
+                RETURNING id
+            """, user_id, telegram_id, track_id, amount)
+            logger.info(f"📦 Subscription created: #{sub_id} for user {telegram_id}, track={track_id}")
+            return sub_id
+    
+    async def activate_subscription(self, track_id: str) -> Optional[Dict]:
+        """Activate subscription after payment confirmed. Returns subscription info."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                sub = await conn.fetchrow("""
+                    SELECT * FROM subscriptions WHERE payment_track_id = $1 AND status = 'pending'
+                """, track_id)
+                
+                if not sub:
+                    return None
+                
+                now = datetime.now()
+                expires = now + timedelta(days=30)
+                
+                await conn.execute("""
+                    UPDATE subscriptions
+                    SET status = 'active', starts_at = $1, expires_at = $2
+                    WHERE id = $3
+                """, now, expires, sub['id'])
+                
+                logger.info(f"✅ Subscription activated: #{sub['id']} until {expires}")
+                return {
+                    'id': sub['id'],
+                    'telegram_id': sub['telegram_id'],
+                    'amount': sub['amount'],
+                    'expires_at': expires
+                }
+    
+    async def get_active_subscription(self, telegram_id: int) -> Optional[Dict]:
+        """Get user's active subscription (not expired)"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT * FROM subscriptions
+                WHERE telegram_id = $1 AND status = 'active' AND expires_at > NOW()
+                ORDER BY expires_at DESC LIMIT 1
+            """, telegram_id)
+            return dict(row) if row else None
+    
+    async def get_subscription_by_track_id(self, track_id: str) -> Optional[Dict]:
+        """Get subscription by payment track ID"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT * FROM subscriptions WHERE payment_track_id = $1
+            """, track_id)
+            return dict(row) if row else None
     
     # =========================================================================
     # Campaign Operations

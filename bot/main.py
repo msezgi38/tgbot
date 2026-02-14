@@ -23,12 +23,13 @@ from telegram.ext import (
     filters
 )
 
-from config import TELEGRAM_BOT_TOKEN, MIN_TOPUP_AMOUNT, DEFAULT_CURRENCY, ADMIN_TELEGRAM_IDS, TEST_MODE, SUPPORTED_COUNTRY_CODES, ASTERISK_RELOAD_CMD
+from config import TELEGRAM_BOT_TOKEN, MIN_TOPUP_AMOUNT, DEFAULT_CURRENCY, ADMIN_TELEGRAM_IDS, TEST_MODE, SUPPORTED_COUNTRY_CODES, ASTERISK_RELOAD_CMD, MONTHLY_SUB_PRICE, WEBHOOK_HOST, WEBHOOK_PORT
 # Real PostgreSQL database - data persists across restarts
 from database import db
 from oxapay_handler import oxapay
 from ui_components import ui
 from magnus_client import magnus
+from webhook_server import WebhookServer
 
 # Add dialer directory to path for PJSIPGenerator import
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dialer'))
@@ -42,8 +43,12 @@ logger = logging.getLogger(__name__)
 
 # Runtime bot settings (admin-configurable)
 bot_settings = {
-    'min_topup': MIN_TOPUP_AMOUNT,  # Default from config, admin can change
+    'min_topup': MIN_TOPUP_AMOUNT,
+    'monthly_price': MONTHLY_SUB_PRICE,  # Admin can change subscription price
 }
+
+# Webhook server instance
+webhook_srv = WebhookServer(db, host=WEBHOOK_HOST, port=WEBHOOK_PORT)
 
 
 
@@ -76,22 +81,90 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_data = await db.get_or_create_user(user.id, user.username, user.first_name, user.last_name)
     
+    # Check subscription status (admins bypass)
+    is_admin = user.id in ADMIN_TELEGRAM_IDS
+    active_sub = await db.get_active_subscription(user.id)
+    
+    if not active_sub and not is_admin:
+        # No active subscription — show subscribe screen
+        price = bot_settings['monthly_price']
+        sub_text = (
+            "<b>1337 Press One</b>\n\n"
+            f"Hello {user.first_name or 'User'}! 👋\n\n"
+            "<b>⚠️ Subscription Required</b>\n"
+            f"Monthly access: <b>${price:.2f}</b>/month\n\n"
+            "Subscribe to unlock all features:\n"
+            "• Launch campaigns\n"
+            "• SIP accounts & trunks\n"
+            "• Lead management\n"
+            "• Live statistics\n\n"
+            "Pay with crypto via Oxapay 💎"
+        )
+        keyboard = [
+            [InlineKeyboardButton(f"📦 Subscribe (${price:.2f}/mo)", callback_data="sub_subscribe")],
+            [InlineKeyboardButton("🔄 Check Status", callback_data="sub_check_status")]
+        ]
+        await update.message.reply_text(sub_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
     stats = await db.get_user_stats(user.id)
     
-    dashboard_text = f"""
-<b>1337 Press One</b>
+    # Subscription expiry info
+    sub_info = ""
+    if active_sub:
+        from datetime import datetime
+        days_left = (active_sub['expires_at'] - datetime.now()).days
+        started = active_sub.get('starts_at')
+        started_str = started.strftime('%d/%m/%Y') if started else 'N/A'
+        expires_str = active_sub['expires_at'].strftime('%d/%m/%Y')
+        sub_info = (
+            f"\n\n\ud83d\udce6 <b>Subscription</b>\n"
+            f"\ud83d\udcc5 Purchased: {started_str}\n"
+            f"\u23f3 Expires: {expires_str} (<b>{days_left} days left</b>)"
+        )
+    
+    # Fetch live MB balance for dashboard
+    mb_balance_str = "N/A"
+    mb_plan_str = "N/A"
+    mb_callerid = user_data.get('caller_id', 'Not Set')
+    has_sip = False
+    try:
+        magnus_info = await db.get_magnus_info(user.id)
+        if magnus_info and magnus_info.get('magnus_username'):
+            has_sip = True
+            _mb_un = magnus_info['magnus_username']
+            _mb_bal = await magnus.get_user_balance(_mb_un)
+            mb_balance_str = f"${_mb_bal:.4f}"
+            _mb_d = await magnus.get_user_by_username(_mb_un)
+            _mb_r = _mb_d.get('rows', [{}])[0] if _mb_d.get('rows') else {}
+            mb_plan_str = _mb_r.get('idPlanname', 'N/A')
+            mb_callerid = _mb_r.get('callingcard_pin', mb_callerid) or mb_callerid
+    except Exception as e:
+        logger.warning(f"Dashboard MB fetch error: {e}")
 
-Hello {user.first_name or 'User'}, welcome to the advanced press-one system.
-
-<b>Your Settings</b>
-Country Code: {user_data.get('country_code', '+1')} | Caller ID: {user_data.get('caller_id', 'Not Set')}
-
-<b>Account & System Info</b>
-Balance: ${user_data.get('credits', 0):.2f} | Trunks: {stats.get('trunk_count', 0)} | Leads: {stats.get('lead_count', 0)}
-Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total_calls', 0)}
-
-Ready to launch your campaign?
-"""
+    if has_sip:
+        dashboard_text = (
+            "<b>1337 Press One</b>\n\n"
+            f"Hello {user.first_name or 'User'}, welcome to the advanced press-one system.\n\n"
+            "<b>Your Settings</b>\n"
+            f"Country Code: {user_data.get('country_code', '+1')} | Caller ID: {mb_callerid}\n\n"
+            "<b>Account &amp; System Info</b>\n"
+            f"Balance: {mb_balance_str} | Plan: {mb_plan_str}\n"
+            f"Trunks: {stats.get('trunk_count', 0)} | Leads: {stats.get('lead_count', 0)}\n"
+            f"Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total_calls', 0)}"
+            f"{sub_info}"
+        )
+    else:
+        dashboard_text = (
+            "<b>1337 Press One</b>\n\n"
+            f"Hello {user.first_name or 'User'}, welcome to the advanced press-one system.\n\n"
+            "<b>Your Settings</b>\n"
+            f"Country Code: {user_data.get('country_code', '+1')} | Caller ID: {user_data.get('caller_id', 'Not Set')}\n\n"
+            "<b>Account &amp; System Info</b>\n"
+            "⚠️ No SIP Account — Create one to start calling\n"
+            f"Leads: {stats.get('lead_count', 0)} | Campaigns: {stats.get('campaign_count', 0)}"
+            f"{sub_info}"
+        )
     
     keyboard = [
         [
@@ -117,7 +190,7 @@ Ready to launch your campaign?
     ]
     
     # Add admin panel button for admins
-    if user.id in ADMIN_TELEGRAM_IDS:
+    if is_admin:
         keyboard.append([
             InlineKeyboardButton("🛡️ Admin Panel", callback_data="menu_admin")
         ])
@@ -443,6 +516,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except ValueError:
             await update.message.reply_text("❌ Invalid number. Enter a valid amount like <code>50</code>", parse_mode='HTML')
+        return
+    
+    # --- Handle admin subscription price setting ---
+    if context.user_data.get('awaiting_admin_sub_price'):
+        text = update.message.text.strip().replace('$', '')
+        context.user_data['awaiting_admin_sub_price'] = False
+        
+        try:
+            new_price = float(text)
+            if new_price < 1:
+                await update.message.reply_text("❌ Price must be at least $1.")
+                return
+            bot_settings['monthly_price'] = new_price
+            await update.message.reply_text(
+                f"✅ <b>Subscription price updated!</b>\n\nNew price: <b>${new_price:.2f}</b>/month",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                ])
+            )
+        except ValueError:
+            await update.message.reply_text("❌ Invalid number. Enter a valid amount like <code>250</code>", parse_mode='HTML')
         return
     
     # --- Handle MagnusBilling top-up amount input ---
@@ -1087,47 +1183,112 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
     user_data = await db.get_or_create_user(user.id)
     
     if action == "main":
+        # Check subscription (admins bypass)
+        is_admin = user.id in ADMIN_TELEGRAM_IDS
+        active_sub = await db.get_active_subscription(user.id)
+        
+        if not active_sub and not is_admin:
+            price = bot_settings['monthly_price']
+            sub_text = (
+                "<b>1337 Press One</b>\n\n"
+                f"Hello {user.first_name or 'User'}! \ud83d\udc4b\n\n"
+                "<b>\u26a0\ufe0f Subscription Required</b>\n"
+                f"Monthly access: <b>${price:.2f}</b>/month\n\n"
+                "Pay with crypto via Oxapay \ud83d\udc8e"
+            )
+            keyboard = [
+                [InlineKeyboardButton(f"\ud83d\udce6 Subscribe (${price:.2f}/mo)", callback_data="sub_subscribe")],
+                [InlineKeyboardButton("\ud83d\udd04 Check Status", callback_data="sub_check_status")]
+            ]
+            await query.edit_message_text(sub_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        
         stats = await db.get_user_stats(user.id)
-        dashboard_text = f"""
-<b>1337 Press One</b>
-
-Hello {user.first_name or 'User'}, welcome to the advanced press-one system.
-
-<b>Your Settings</b>
-Country Code: {user_data.get('country_code', '+1')} | Caller ID: {user_data.get('caller_id', 'Not Set')}
-
-<b>Account & System Info</b>
-Balance: ${user_data.get('credits', 0):.2f} | Trunks: {stats.get('trunk_count', 0)} | Leads: {stats.get('lead_count', 0)}
-Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total_calls', 0)}
-"""
+        
+        # Subscription expiry info
+        sub_info = ""
+        if active_sub:
+            from datetime import datetime
+            days_left = (active_sub['expires_at'] - datetime.now()).days
+            started = active_sub.get('starts_at')
+            started_str = started.strftime('%d/%m/%Y') if started else 'N/A'
+            expires_str = active_sub['expires_at'].strftime('%d/%m/%Y')
+            sub_info = (
+                f"\n\n\ud83d\udce6 <b>Subscription</b>\n"
+                f"\ud83d\udcc5 Purchased: {started_str}\n"
+                f"\u23f3 Expires: {expires_str} (<b>{days_left} days left</b>)"
+            )
+        
+        # Fetch live MB balance for dashboard
+        mb_balance_str = "N/A"
+        mb_plan_str = "N/A"
+        mb_callerid = user_data.get('caller_id', 'Not Set')
+        has_sip = False
+        try:
+            magnus_info = await db.get_magnus_info(user.id)
+            if magnus_info and magnus_info.get('magnus_username'):
+                has_sip = True
+                _mb_un = magnus_info['magnus_username']
+                _mb_bal = await magnus.get_user_balance(_mb_un)
+                mb_balance_str = f"${_mb_bal:.4f}"
+                _mb_d = await magnus.get_user_by_username(_mb_un)
+                _mb_r = _mb_d.get('rows', [{}])[0] if _mb_d.get('rows') else {}
+                mb_plan_str = _mb_r.get('idPlanname', 'N/A')
+                mb_callerid = _mb_r.get('callingcard_pin', mb_callerid) or mb_callerid
+        except Exception as e:
+            logger.warning(f"Dashboard MB fetch error: {e}")
+        
+        if has_sip:
+            dashboard_text = (
+                "<b>1337 Press One</b>\n\n"
+                f"Hello {user.first_name or 'User'}, welcome to the advanced press-one system.\n\n"
+                "<b>Your Settings</b>\n"
+                f"Country Code: {user_data.get('country_code', '+1')} | Caller ID: {mb_callerid}\n\n"
+                "<b>Account &amp; System Info</b>\n"
+                f"Balance: {mb_balance_str} | Plan: {mb_plan_str}\n"
+                f"Trunks: {stats.get('trunk_count', 0)} | Leads: {stats.get('lead_count', 0)}\n"
+                f"Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total_calls', 0)}"
+                f"{sub_info}"
+            )
+        else:
+            dashboard_text = (
+                "<b>1337 Press One</b>\n\n"
+                f"Hello {user.first_name or 'User'}, welcome to the advanced press-one system.\n\n"
+                "<b>Your Settings</b>\n"
+                f"Country Code: {user_data.get('country_code', '+1')} | Caller ID: {user_data.get('caller_id', 'Not Set')}\n\n"
+                "<b>Account &amp; System Info</b>\n"
+                "\u26a0\ufe0f No SIP Account \u2014 Create one to start calling\n"
+                f"Leads: {stats.get('lead_count', 0)} | Campaigns: {stats.get('campaign_count', 0)}"
+                f"{sub_info}"
+            )
         
         keyboard = [
             [
-                InlineKeyboardButton("🚀 Launch Campaign", callback_data="menu_launch"),
-                InlineKeyboardButton("💰 Check Balance", callback_data="menu_balance")
+                InlineKeyboardButton("\ud83d\ude80 Launch Campaign", callback_data="menu_launch"),
+                InlineKeyboardButton("\ud83d\udcb0 Check Balance", callback_data="menu_balance")
             ],
             [
-                InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks"),
-                InlineKeyboardButton("📋 My Leads", callback_data="menu_leads")
+                InlineKeyboardButton("\ud83d\udd0c My Trunks", callback_data="menu_trunks"),
+                InlineKeyboardButton("\ud83d\udccb My Leads", callback_data="menu_leads")
             ],
             [
-                InlineKeyboardButton("📞 SIP Account", callback_data="menu_trunks"),
-                InlineKeyboardButton("📊 Live Statistics", callback_data="menu_statistics")
+                InlineKeyboardButton("\ud83d\udcde SIP Account", callback_data="menu_trunks"),
+                InlineKeyboardButton("\ud83d\udcca Live Statistics", callback_data="menu_statistics")
             ],
             [
-                InlineKeyboardButton("🛠️ Tools & Utilities", callback_data="menu_tools"),
-                InlineKeyboardButton("🎵 My Voices", callback_data="menu_voices")
+                InlineKeyboardButton("\ud83d\udee0\ufe0f Tools & Utilities", callback_data="menu_tools"),
+                InlineKeyboardButton("\ud83c\udfb5 My Voices", callback_data="menu_voices")
             ],
             [
-                InlineKeyboardButton("🔑 Account Info", callback_data="menu_account"),
-                InlineKeyboardButton("💬 Support", callback_data="menu_support")
+                InlineKeyboardButton("\ud83d\udd11 Account Info", callback_data="menu_account"),
+                InlineKeyboardButton("\ud83d\udcac Support", callback_data="menu_support")
             ]
         ]
         
         # Add admin panel button for admins
-        if user.id in ADMIN_TELEGRAM_IDS:
+        if is_admin:
             keyboard.append([
-                InlineKeyboardButton("🛡️ Admin Panel", callback_data="menu_admin")
+                InlineKeyboardButton("\ud83d\udee1\ufe0f Admin Panel", callback_data="menu_admin")
             ])
         
         await query.edit_message_text(dashboard_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1141,20 +1302,24 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
         user_count = len(all_users) if all_users else 0
         
         admin_text = (
-            "🛡️ <b>Admin Panel</b>\n\n"
-            f"👥 Total Users: <b>{user_count}</b>\n"
-            f"💵 Min Top-up: <b>${bot_settings['min_topup']}</b>\n\n"
+            "\ud83d\udee1\ufe0f <b>Admin Panel</b>\n\n"
+            f"\ud83d\udc65 Total Users: <b>{user_count}</b>\n"
+            f"\ud83d\udcb5 Min Top-up: <b>${bot_settings['min_topup']}</b>\n"
+            f"\ud83d\udce6 Subscription Price: <b>${bot_settings['monthly_price']}</b>/mo\n\n"
             "Select an option:"
         )
         
         keyboard = [
             [
-                InlineKeyboardButton("👥 View Users", callback_data="menu_admin_users"),
-                InlineKeyboardButton("💰 Manage Prices", callback_data="menu_admin_prices")
+                InlineKeyboardButton("\ud83d\udc65 View Users", callback_data="menu_admin_users"),
+                InlineKeyboardButton("\ud83d\udcb0 Manage Prices", callback_data="menu_admin_prices")
             ],
             [
-                InlineKeyboardButton("💵 Set Min Top-up", callback_data="menu_admin_min_topup"),
-                InlineKeyboardButton("📊 System Stats", callback_data="menu_admin_stats")
+                InlineKeyboardButton("\ud83d\udcb5 Set Min Top-up", callback_data="menu_admin_min_topup"),
+                InlineKeyboardButton("\ud83d\udce6 Set Sub Price", callback_data="menu_admin_sub_price")
+            ],
+            [
+                InlineKeyboardButton("\ud83d\udcca System Stats", callback_data="menu_admin_stats")
             ],
             [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
         ]
@@ -1170,6 +1335,18 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
             f"Current: <b>${bot_settings['min_topup']}</b>\n\n"
             f"Enter new minimum amount in USD:\n"
             f"Example: <code>50</code> or <code>100</code>",
+            parse_mode='HTML'
+        )
+    
+    elif action == "admin_sub_price":
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        context.user_data['awaiting_admin_sub_price'] = True
+        await query.edit_message_text(
+            f"📦 <b>Set Monthly Subscription Price</b>\n\n"
+            f"Current: <b>${bot_settings['monthly_price']}</b>/month\n\n"
+            f"Enter new monthly price in USD:\n"
+            f"Example: <code>250</code> or <code>300</code>",
             parse_mode='HTML'
         )
     
@@ -2258,18 +2435,183 @@ async def handle_admin_price_callback(update: Update, context: ContextTypes.DEFA
         )
 
 # =============================================================================
+# Subscription Callbacks
+# =============================================================================
+
+async def handle_subscribe_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle subscription-related callbacks"""
+    query = update.callback_query
+    await query.answer()
+    
+    action = query.data.replace("sub_", "")
+    user = update.effective_user
+    user_data = await db.get_or_create_user(user.id)
+    
+    if action == "subscribe":
+        price = bot_settings['monthly_price']
+        
+        await query.edit_message_text(
+            f"\u23f3 Creating payment for <b>${price:.2f}</b>...\n"
+            "Please wait...",
+            parse_mode='HTML'
+        )
+        
+        try:
+            # Create Oxapay payment
+            result = await oxapay.create_payment(
+                amount=price,
+                currency='USDT',
+                order_id=f"sub_{user.id}_{int(datetime.now().timestamp())}"
+            )
+            
+            if result and result.get('success'):
+                track_id = result.get('track_id', '')
+                payment_url = result.get('payment_url', '')
+                
+                # Save payment + subscription in DB
+                db_user_id = user_data.get('id')
+                await db.create_payment(
+                    user_id=db_user_id,
+                    track_id=track_id,
+                    amount=price,
+                    credits=0,  # subscription, not credits
+                    currency='USDT',
+                    payment_url=payment_url
+                )
+                await db.create_subscription(
+                    user_id=db_user_id,
+                    telegram_id=user.id,
+                    track_id=track_id,
+                    amount=price
+                )
+                
+                keyboard = [
+                    [InlineKeyboardButton("\ud83d\udcb3 Pay Now", url=payment_url)],
+                    [InlineKeyboardButton("\ud83d\udd04 Check Status", callback_data="sub_check_status")],
+                    [InlineKeyboardButton("\ud83d\udd19 Back", callback_data="menu_main")]
+                ]
+                
+                await query.edit_message_text(
+                    f"\ud83d\udce6 <b>Monthly Subscription</b>\n\n"
+                    f"\ud83d\udcb0 Amount: <b>${price:.2f} USDT</b>\n"
+                    f"\ud83d\udd17 Track ID: <code>{track_id}</code>\n\n"
+                    "Click the button below to pay:\n\n"
+                    "\u2139\ufe0f After payment, your subscription will be\n"
+                    "activated automatically via webhook.\n"
+                    "You can also tap 'Check Status' to verify.",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                error_msg = result.get('message', 'Unknown error') if result else 'No response'
+                await query.edit_message_text(
+                    f"\u274c Payment creation failed: {error_msg}\n\n"
+                    "Please try again later.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("\ud83d\udd04 Try Again", callback_data="sub_subscribe")],
+                        [InlineKeyboardButton("\ud83d\udd19 Back", callback_data="menu_main")]
+                    ])
+                )
+        except Exception as e:
+            logger.error(f"Subscription payment error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"\u274c Error: {str(e)[:200]}\n\nPlease try again.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("\ud83d\udd04 Try Again", callback_data="sub_subscribe")]
+                ])
+            )
+    
+    elif action == "check_status":
+        # Check for any pending subscription and verify with Oxapay
+        active_sub = await db.get_active_subscription(user.id)
+        if active_sub:
+            days_left = (active_sub['expires_at'] - datetime.now()).days
+            await query.edit_message_text(
+                f"\u2705 <b>Subscription Active!</b>\n\n"
+                f"\ud83d\udce6 Expires: <b>{active_sub['expires_at'].strftime('%Y-%m-%d')}</b>\n"
+                f"\u23f3 Days left: <b>{days_left}</b>\n\n"
+                "Tap Main Menu to access all features.",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("\ud83c\udfe0 Main Menu", callback_data="menu_main")]
+                ])
+            )
+        else:
+            # Try to check if there's a pending payment and verify it
+            try:
+                async with db.pool.acquire() as conn:
+                    pending_sub = await conn.fetchrow("""
+                        SELECT * FROM subscriptions 
+                        WHERE telegram_id = $1 AND status = 'pending'
+                        ORDER BY created_at DESC LIMIT 1
+                    """, user.id)
+                
+                if pending_sub:
+                    # Try to check payment status with Oxapay
+                    track_id = pending_sub['payment_track_id']
+                    try:
+                        status_result = await oxapay.check_payment_status(track_id)
+                        if status_result and status_result.get('status', '').lower() in ('paid', 'complete', 'completed', 'confirmed'):
+                            # Payment confirmed! Activate subscription
+                            result = await db.activate_subscription(track_id)
+                            if result:
+                                await query.edit_message_text(
+                                    f"\u2705 <b>Payment Confirmed & Subscription Activated!</b>\n\n"
+                                    f"\ud83d\udce6 Valid until: <b>{result['expires_at'].strftime('%Y-%m-%d')}</b>\n\n"
+                                    "Tap Main Menu to access all features.",
+                                    parse_mode='HTML',
+                                    reply_markup=InlineKeyboardMarkup([
+                                        [InlineKeyboardButton("\ud83c\udfe0 Main Menu", callback_data="menu_main")]
+                                    ])
+                                )
+                                return
+                    except Exception as e:
+                        logger.warning(f"Failed to check payment status: {e}")
+                    
+                    await query.edit_message_text(
+                        f"\u23f3 <b>Payment Pending</b>\n\n"
+                        f"Track ID: <code>{track_id}</code>\n"
+                        "Your payment has not been confirmed yet.\n"
+                        "Please complete the payment or wait for confirmation.",
+                        parse_mode='HTML',
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("\ud83d\udd04 Check Again", callback_data="sub_check_status")],
+                            [InlineKeyboardButton("\ud83d\udce6 New Payment", callback_data="sub_subscribe")]
+                        ])
+                    )
+                else:
+                    await query.edit_message_text(
+                        "\u274c <b>No Active Subscription</b>\n\n"
+                        "You don't have an active subscription.\n"
+                        "Subscribe to access all features.",
+                        parse_mode='HTML',
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton(f"\ud83d\udce6 Subscribe (${bot_settings['monthly_price']:.2f}/mo)", callback_data="sub_subscribe")]
+                        ])
+                    )
+            except Exception as e:
+                logger.error(f"Sub status check error: {e}")
+                await query.edit_message_text(f"\u274c Error checking status: {str(e)[:200]}")
+
+
+# =============================================================================
 # Bot Lifecycle Hooks
 # =============================================================================
 
 async def post_init(application):
-    """Called after bot initialization - connect to database"""
+    """Called after bot initialization - connect to database, start webhook"""
     await db.connect()
-    logger.info("✅ Database connected")
+    await db.ensure_subscriptions_table()
+    # Set bot_app on webhook server so it can send Telegram messages
+    webhook_srv.bot_app = application
+    await webhook_srv.start()
+    logger.info("\u2705 Database connected, webhook server started")
 
 async def post_shutdown(application):
     """Called on bot shutdown - cleanup resources"""
+    await webhook_srv.stop()
     await db.close()
-    logger.info("🔴 Database connection closed")
+    logger.info("\ud83d\udd34 Database and webhook server stopped")
 
 
 def main():
@@ -2294,6 +2636,7 @@ def main():
     application.add_handler(CommandHandler("users", admin_users_command))
     
     # Callback handlers
+    application.add_handler(CallbackQueryHandler(handle_subscribe_callbacks, pattern="^sub_"))
     application.add_handler(CallbackQueryHandler(handle_buy_callback, pattern="^buy_"))
     application.add_handler(CallbackQueryHandler(handle_start_campaign, pattern="^start_campaign_"))
     application.add_handler(CallbackQueryHandler(handle_campaign_setup, pattern="^camp_"))

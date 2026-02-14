@@ -123,6 +123,38 @@ class OxapayHandler:
                 'error': str(e)
             }
     
+    async def check_payment_status(self, track_id: str) -> Dict:
+        """Check payment status from Oxapay API"""
+        url = "https://api.oxapay.com/merchants/inquiry"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+        payload = {
+            "merchant": self.api_key,
+            "trackId": track_id,
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                logger.info(f"Oxapay inquiry → {track_id}")
+                async with session.post(url, json=payload, headers=headers, ssl=True) as response:
+                    response_text = await response.text()
+                    logger.info(f"Oxapay inquiry ← status={response.status}, body={response_text[:500]}")
+                    
+                    if response.status != 200:
+                        return {'error': f"HTTP {response.status}"}
+                    
+                    try:
+                        data = json.loads(response_text)
+                        return data
+                    except json.JSONDecodeError:
+                        return {'error': 'Invalid JSON response'}
+        except Exception as e:
+            logger.error(f"❌ Payment status check error: {e}")
+            return {'error': str(e)}
+    
     def verify_webhook(self, data: Dict) -> bool:
         """Verify webhook authenticity"""
         return True
