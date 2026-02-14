@@ -81,11 +81,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_data = await db.get_or_create_user(user.id, user.username, user.first_name, user.last_name)
     
-    # Check subscription status (admins bypass)
+    # Check subscription status (admins bypass, price=0 means free access)
     is_admin = user.id in ADMIN_TELEGRAM_IDS
+    free_mode = bot_settings['monthly_price'] <= 0
     active_sub = await db.get_active_subscription(user.id)
     
-    if not active_sub and not is_admin:
+    if not active_sub and not is_admin and not free_mode:
         # Check if subscription is frozen
         sub_status = await db.get_subscription_status(user.id)
         if sub_status == 'frozen':
@@ -1241,11 +1242,12 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
     user_data = await db.get_or_create_user(user.id)
     
     if action == "main":
-        # Check subscription (admins bypass)
+        # Check subscription (admins bypass, price=0 means free access)
         is_admin = user.id in ADMIN_TELEGRAM_IDS
+        free_mode = bot_settings['monthly_price'] <= 0
         active_sub = await db.get_active_subscription(user.id)
         
-        if not active_sub and not is_admin:
+        if not active_sub and not is_admin and not free_mode:
             # Check if subscription is frozen
             sub_status = await db.get_subscription_status(user.id)
             if sub_status == 'frozen':
@@ -1686,11 +1688,6 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
                 ],
             ]
             
-            if trunks:
-                for trunk in trunks:
-                    keyboard.append([
-                        InlineKeyboardButton(f"🗑 Delete {trunk['name'][:20]}", callback_data=f"trunk_delete_{trunk['id']}")
-                    ])
             
             keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")])
         else:
@@ -1938,48 +1935,7 @@ async def handle_trunk_callbacks(update: Update, context: ContextTypes.DEFAULT_T
                 ])
             )
     
-    elif data.startswith("trunk_delete_"):
-        trunk_id = int(data.replace("trunk_delete_", ""))
-        trunk = await db.get_trunk(trunk_id)
-        
-        await query.edit_message_text(
-            f"⚠️ <b>Delete Trunk?</b>\n\n"
-            f"Trunk: {trunk['name'] if trunk else 'Unknown'}\n\n"
-            f"This action cannot be undone.",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Yes, Delete", callback_data=f"trunk_confirm_delete_{trunk_id}")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="menu_trunks")]
-            ])
-        )
-    
-    elif data.startswith("trunk_confirm_delete_"):
-        trunk_id = int(data.replace("trunk_confirm_delete_", ""))
-        try:
-            await db.delete_trunk(trunk_id)
-            
-            # Regenerate PJSIP config to remove deleted trunk
-            reload_status = await regenerate_pjsip()
-            
-            await query.edit_message_text(
-                f"✅ Trunk deleted.{reload_status}",
-                parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
-                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
-                ])
-            )
-        except Exception as e:
-            logger.error(f"❌ Failed to delete trunk {trunk_id}: {e}")
-            await query.edit_message_text(
-                f"❌ <b>Failed to delete trunk</b>\n\n"
-                f"Error: {str(e)[:200]}",
-                parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔌 My Trunks", callback_data="menu_trunks")],
-                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
-                ])
-            )
+
 
 
 # =============================================================================
