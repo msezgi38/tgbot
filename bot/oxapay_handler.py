@@ -36,7 +36,9 @@ class OxapayHandler:
         
         headers = {
             "Content-Type": "application/json",
+            "Accept": "application/json",
             "merchant": self.api_key,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
         
         payload = {
@@ -50,10 +52,10 @@ class OxapayHandler:
         
         try:
             async with aiohttp.ClientSession() as session:
-                logger.info(f"Oxapay request: url={self.api_url}, payload={payload}")
+                logger.info(f"Oxapay request: url={self.api_url}, amount={amount}")
                 async with session.post(self.api_url, json=payload, headers=headers) as response:
                     response_text = await response.text()
-                    logger.info(f"Oxapay raw response: status={response.status}, body={response_text[:500]}")
+                    logger.info(f"Oxapay response: status={response.status}, body={response_text[:500]}")
                     
                     if response.status != 200:
                         return {
@@ -66,7 +68,7 @@ class OxapayHandler:
                     except Exception as json_err:
                         return {
                             'success': False,
-                            'error': f"JSON parse error: {str(json_err)[:100]}, body: {response_text[:200]}"
+                            'error': f"JSON parse error: {str(json_err)[:100]}"
                         }
                     
                     if data.get('result') == 100:
