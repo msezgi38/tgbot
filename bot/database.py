@@ -590,6 +590,18 @@ class Database:
                 'expires_at': expires
             }
     
+    async def get_all_subscriptions(self) -> list:
+        """Get all subscriptions with user info"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT s.*, u.telegram_id as tg_id, u.username, u.first_name
+                FROM subscriptions s
+                JOIN users u ON u.id = s.user_id
+                ORDER BY s.created_at DESC
+                LIMIT 50
+            """)
+            return [dict(r) for r in rows]
+    
     # =========================================================================
     # Campaign Operations
     # =========================================================================

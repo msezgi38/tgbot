@@ -1428,6 +1428,7 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
                 InlineKeyboardButton("🎁 Grant Sub", callback_data="menu_admin_grant")
             ],
             [
+                InlineKeyboardButton("📝 View Subs", callback_data="menu_admin_subs"),
                 InlineKeyboardButton("📊 System Stats", callback_data="menu_admin_stats")
             ],
             [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
@@ -1482,6 +1483,43 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             "Example: <code>123456789</code>\n\n"
             "This will create/activate a 30-day subscription for the user.",
             parse_mode='HTML'
+        )
+    
+    elif action == "admin_subs":
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        
+        subs = await db.get_all_subscriptions()
+        if not subs:
+            await query.edit_message_text(
+                "📝 <b>No subscriptions found.</b>",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")]
+                ])
+            )
+            return
+        
+        status_icons = {'active': '🟢', 'frozen': '🔒', 'pending': '⏳', 'expired': '🔴'}
+        text = f"📝 <b>Subscriptions ({len(subs)})</b>\n\n"
+        
+        for s in subs[:20]:  # Show max 20
+            icon = status_icons.get(s['status'], '❓')
+            name = s.get('first_name') or s.get('username') or 'Unknown'
+            tg_id = s.get('tg_id', s.get('telegram_id', '?'))
+            expires = s['expires_at'].strftime('%d/%m/%Y') if s.get('expires_at') else 'N/A'
+            amount = f"${s['amount']:.0f}" if s.get('amount') else 'Free'
+            text += f"{icon} <code>{tg_id}</code> {name} | {amount} | {expires}\n"
+        
+        if len(subs) > 20:
+            text += f"\n...and {len(subs) - 20} more"
+        
+        await query.edit_message_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")]
+            ])
         )
     
     elif action == "admin_users":
