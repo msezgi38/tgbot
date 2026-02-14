@@ -86,23 +86,36 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_sub = await db.get_active_subscription(user.id)
     
     if not active_sub and not is_admin:
+        # Check if subscription is frozen
+        sub_status = await db.get_subscription_status(user.id)
+        if sub_status == 'frozen':
+            await update.message.reply_text(
+                "<b>1337 Press One</b>\n\n"
+                f"Hello {user.first_name or 'User'}! \U0001f44b\n\n"
+                "<b>\u26d4 Subscription Frozen</b>\n"
+                "Your subscription has been frozen by an admin.\n"
+                "Please contact support for more information.",
+                parse_mode='HTML'
+            )
+            return
+        
         # No active subscription — show subscribe screen
         price = bot_settings['monthly_price']
         sub_text = (
             "<b>1337 Press One</b>\n\n"
-            f"Hello {user.first_name or 'User'}! 👋\n\n"
-            "<b>⚠️ Subscription Required</b>\n"
+            f"Hello {user.first_name or 'User'}! \U0001f44b\n\n"
+            "<b>\u26a0\ufe0f Subscription Required</b>\n"
             f"Monthly access: <b>${price:.2f}</b>/month\n\n"
             "Subscribe to unlock all features:\n"
-            "• Launch campaigns\n"
-            "• SIP accounts & trunks\n"
-            "• Lead management\n"
-            "• Live statistics\n\n"
-            "Pay with crypto via Oxapay 💎"
+            "\u2022 Launch campaigns\n"
+            "\u2022 SIP accounts & trunks\n"
+            "\u2022 Lead management\n"
+            "\u2022 Live statistics\n\n"
+            "Pay with crypto via Oxapay \U0001f48e"
         )
         keyboard = [
-            [InlineKeyboardButton(f"📦 Subscribe (${price:.2f}/mo)", callback_data="sub_subscribe")],
-            [InlineKeyboardButton("🔄 Check Status", callback_data="sub_check_status")]
+            [InlineKeyboardButton(f"\U0001f4e6 Subscribe (${price:.2f}/mo)", callback_data="sub_subscribe")],
+            [InlineKeyboardButton("\U0001f504 Check Status", callback_data="sub_check_status")]
         ]
         await update.message.reply_text(sub_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -539,6 +552,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except ValueError:
             await update.message.reply_text("❌ Invalid number. Enter a valid amount like <code>250</code>", parse_mode='HTML')
+        return
+    
+    # --- Handle admin subscription freeze ---
+    if context.user_data.get('awaiting_admin_freeze'):
+        text = update.message.text.strip()
+        context.user_data['awaiting_admin_freeze'] = False
+        
+        try:
+            target_tg_id = int(text)
+            sub_status = await db.get_subscription_status(target_tg_id)
+            
+            if sub_status == 'active':
+                success = await db.freeze_subscription(target_tg_id)
+                if success:
+                    await update.message.reply_text(
+                        f"🔒 <b>Subscription Frozen!</b>\n\nUser <code>{target_tg_id}</code> subscription has been frozen.",
+                        parse_mode='HTML',
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")]
+                        ])
+                    )
+                else:
+                    await update.message.reply_text(f"❌ Failed to freeze user {target_tg_id}.")
+            elif sub_status == 'frozen':
+                success = await db.unfreeze_subscription(target_tg_id)
+                if success:
+                    await update.message.reply_text(
+                        f"🔓 <b>Subscription Unfrozen!</b>\n\nUser <code>{target_tg_id}</code> subscription has been reactivated.",
+                        parse_mode='HTML',
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")]
+                        ])
+                    )
+                else:
+                    await update.message.reply_text(f"❌ Failed to unfreeze user {target_tg_id}.")
+            else:
+                await update.message.reply_text(
+                    f"❌ User <code>{target_tg_id}</code> has no active or frozen subscription.\nStatus: {sub_status or 'none'}",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Admin Panel", callback_data="menu_admin")]
+                    ])
+                )
+        except ValueError:
+            await update.message.reply_text("❌ Invalid ID. Enter a numeric Telegram user ID.", parse_mode='HTML')
         return
     
     # --- Handle MagnusBilling top-up amount input ---
@@ -1188,17 +1246,30 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         active_sub = await db.get_active_subscription(user.id)
         
         if not active_sub and not is_admin:
+            # Check if subscription is frozen
+            sub_status = await db.get_subscription_status(user.id)
+            if sub_status == 'frozen':
+                await query.edit_message_text(
+                    "<b>1337 Press One</b>\n\n"
+                    f"Hello {user.first_name or 'User'}! \U0001f44b\n\n"
+                    "<b>\u26d4 Subscription Frozen</b>\n"
+                    "Your subscription has been frozen by an admin.\n"
+                    "Please contact support for more information.",
+                    parse_mode='HTML'
+                )
+                return
+            
             price = bot_settings['monthly_price']
             sub_text = (
                 "<b>1337 Press One</b>\n\n"
-                f"Hello {user.first_name or 'User'}! \ud83d\udc4b\n\n"
+                f"Hello {user.first_name or 'User'}! \U0001f44b\n\n"
                 "<b>\u26a0\ufe0f Subscription Required</b>\n"
                 f"Monthly access: <b>${price:.2f}</b>/month\n\n"
-                "Pay with crypto via Oxapay \ud83d\udc8e"
+                "Pay with crypto via Oxapay \U0001f48e"
             )
             keyboard = [
-                [InlineKeyboardButton(f"\ud83d\udce6 Subscribe (${price:.2f}/mo)", callback_data="sub_subscribe")],
-                [InlineKeyboardButton("\ud83d\udd04 Check Status", callback_data="sub_check_status")]
+                [InlineKeyboardButton(f"\U0001f4e6 Subscribe (${price:.2f}/mo)", callback_data="sub_subscribe")],
+                [InlineKeyboardButton("\U0001f504 Check Status", callback_data="sub_check_status")]
             ]
             await query.edit_message_text(sub_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
             return
@@ -1264,31 +1335,31 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         
         keyboard = [
             [
-                InlineKeyboardButton("\ud83d\ude80 Launch Campaign", callback_data="menu_launch"),
-                InlineKeyboardButton("\ud83d\udcb0 Check Balance", callback_data="menu_balance")
+                InlineKeyboardButton("\U0001f680 Launch Campaign", callback_data="menu_launch"),
+                InlineKeyboardButton("\U0001f4b0 Check Balance", callback_data="menu_balance")
             ],
             [
-                InlineKeyboardButton("\ud83d\udd0c My Trunks", callback_data="menu_trunks"),
-                InlineKeyboardButton("\ud83d\udccb My Leads", callback_data="menu_leads")
+                InlineKeyboardButton("\U0001f50c My Trunks", callback_data="menu_trunks"),
+                InlineKeyboardButton("\U0001f4cb My Leads", callback_data="menu_leads")
             ],
             [
-                InlineKeyboardButton("\ud83d\udcde SIP Account", callback_data="menu_trunks"),
-                InlineKeyboardButton("\ud83d\udcca Live Statistics", callback_data="menu_statistics")
+                InlineKeyboardButton("\U0001f4de SIP Account", callback_data="menu_trunks"),
+                InlineKeyboardButton("\U0001f4ca Live Statistics", callback_data="menu_statistics")
             ],
             [
-                InlineKeyboardButton("\ud83d\udee0\ufe0f Tools & Utilities", callback_data="menu_tools"),
-                InlineKeyboardButton("\ud83c\udfb5 My Voices", callback_data="menu_voices")
+                InlineKeyboardButton("\U0001f6e0\ufe0f Tools & Utilities", callback_data="menu_tools"),
+                InlineKeyboardButton("\U0001f3b5 My Voices", callback_data="menu_voices")
             ],
             [
-                InlineKeyboardButton("\ud83d\udd11 Account Info", callback_data="menu_account"),
-                InlineKeyboardButton("\ud83d\udcac Support", callback_data="menu_support")
+                InlineKeyboardButton("\U0001f511 Account Info", callback_data="menu_account"),
+                InlineKeyboardButton("\U0001f4ac Support", callback_data="menu_support")
             ]
         ]
         
         # Add admin panel button for admins
         if is_admin:
             keyboard.append([
-                InlineKeyboardButton("\ud83d\udee1\ufe0f Admin Panel", callback_data="menu_admin")
+                InlineKeyboardButton("\U0001f6e1\ufe0f Admin Panel", callback_data="menu_admin")
             ])
         
         await query.edit_message_text(dashboard_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1302,24 +1373,25 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         user_count = len(all_users) if all_users else 0
         
         admin_text = (
-            "\ud83d\udee1\ufe0f <b>Admin Panel</b>\n\n"
-            f"\ud83d\udc65 Total Users: <b>{user_count}</b>\n"
-            f"\ud83d\udcb5 Min Top-up: <b>${bot_settings['min_topup']}</b>\n"
-            f"\ud83d\udce6 Subscription Price: <b>${bot_settings['monthly_price']}</b>/mo\n\n"
+            "🛡️ <b>Admin Panel</b>\n\n"
+            f"👥 Total Users: <b>{user_count}</b>\n"
+            f"💵 Min Top-up: <b>${bot_settings['min_topup']}</b>\n"
+            f"📦 Subscription Price: <b>${bot_settings['monthly_price']}</b>/mo\n\n"
             "Select an option:"
         )
         
         keyboard = [
             [
-                InlineKeyboardButton("\ud83d\udc65 View Users", callback_data="menu_admin_users"),
-                InlineKeyboardButton("\ud83d\udcb0 Manage Prices", callback_data="menu_admin_prices")
+                InlineKeyboardButton("👥 View Users", callback_data="menu_admin_users"),
+                InlineKeyboardButton("💰 Manage Prices", callback_data="menu_admin_prices")
             ],
             [
-                InlineKeyboardButton("\ud83d\udcb5 Set Min Top-up", callback_data="menu_admin_min_topup"),
-                InlineKeyboardButton("\ud83d\udce6 Set Sub Price", callback_data="menu_admin_sub_price")
+                InlineKeyboardButton("💵 Set Min Top-up", callback_data="menu_admin_min_topup"),
+                InlineKeyboardButton("📦 Set Sub Price", callback_data="menu_admin_sub_price")
             ],
             [
-                InlineKeyboardButton("\ud83d\udcca System Stats", callback_data="menu_admin_stats")
+                InlineKeyboardButton("🔒 Freeze User Sub", callback_data="menu_admin_freeze"),
+                InlineKeyboardButton("📊 System Stats", callback_data="menu_admin_stats")
             ],
             [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
         ]
@@ -1347,6 +1419,19 @@ async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             f"Current: <b>${bot_settings['monthly_price']}</b>/month\n\n"
             f"Enter new monthly price in USD:\n"
             f"Example: <code>250</code> or <code>300</code>",
+            parse_mode='HTML'
+        )
+    
+    elif action == "admin_freeze":
+        if user.id not in ADMIN_TELEGRAM_IDS:
+            return
+        context.user_data['awaiting_admin_freeze'] = True
+        await query.edit_message_text(
+            "🔒 <b>Freeze / Unfreeze User Subscription</b>\n\n"
+            "Enter the Telegram user ID to freeze or unfreeze:\n"
+            "Example: <code>123456789</code>\n\n"
+            "If user has active sub, it will be <b>frozen</b>.\n"
+            "If user has frozen sub, it will be <b>unfrozen</b>.",
             parse_mode='HTML'
         )
     

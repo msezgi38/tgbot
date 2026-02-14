@@ -536,6 +536,34 @@ class Database:
             """, track_id)
             return dict(row) if row else None
     
+    async def freeze_subscription(self, telegram_id: int) -> bool:
+        """Freeze a user's active subscription"""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE subscriptions SET status = 'frozen'
+                WHERE telegram_id = $1 AND status = 'active' AND expires_at > NOW()
+            """, telegram_id)
+            return 'UPDATE' in result and result != 'UPDATE 0'
+    
+    async def unfreeze_subscription(self, telegram_id: int) -> bool:
+        """Unfreeze a user's frozen subscription"""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE subscriptions SET status = 'active'
+                WHERE telegram_id = $1 AND status = 'frozen'
+            """, telegram_id)
+            return 'UPDATE' in result and result != 'UPDATE 0'
+    
+    async def get_subscription_status(self, telegram_id: int) -> Optional[str]:
+        """Get subscription status for a user (active, frozen, pending, etc)"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT status FROM subscriptions
+                WHERE telegram_id = $1 AND expires_at > NOW()
+                ORDER BY created_at DESC LIMIT 1
+            """, telegram_id)
+            return row['status'] if row else None
+    
     # =========================================================================
     # Campaign Operations
     # =========================================================================
