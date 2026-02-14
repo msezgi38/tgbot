@@ -539,8 +539,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             new_price = float(text)
-            if new_price < 1:
-                await update.message.reply_text("❌ Price must be at least $1.")
+            if new_price < 0:
+                await update.message.reply_text("❌ Price cannot be negative.")
                 return
             bot_settings['monthly_price'] = new_price
             await update.message.reply_text(
