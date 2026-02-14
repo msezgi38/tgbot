@@ -419,6 +419,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Send a valid price (e.g. 25.00)")
         return
     
+    # --- Handle MagnusBilling Caller ID input ---
+    if context.user_data.get('awaiting_mb_cid'):
+        text = update.message.text.strip()
+        context.user_data['awaiting_mb_cid'] = False
+        
+        # Validate: only digits, 10-15 chars
+        clean_cid = text.replace('+', '').replace('-', '').replace(' ', '')
+        if not clean_cid.isdigit() or len(clean_cid) < 10 or len(clean_cid) > 15:
+            await update.message.reply_text(
+                "❌ Invalid Caller ID. Must be 10-15 digits.\n"
+                "Example: <code>12125551234</code>",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")]
+                ])
+            )
+            return
+        
+        try:
+            magnus_info = await db.get_magnus_info(user.id)
+            if magnus_info and magnus_info.get('magnus_user_id'):
+                result = await magnus.update_callerid(int(magnus_info['magnus_user_id']), clean_cid)
+                if result.get('success'):
+                    await update.message.reply_text(
+                        f"✅ <b>Caller ID updated!</b>\n\nNew CID: <code>{clean_cid}</code>",
+                        parse_mode='HTML',
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")],
+                            [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                        ])
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"❌ Failed to update CID: {result}",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")]
+                        ])
+                    )
+            else:
+                await update.message.reply_text("❌ No SIP account found.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
+        return
+    
     # --- SIP trunk creation is now automatic via MagnusBilling ---
     # Manual trunk input flow removed - handled by trunk_auto_create callback
     
@@ -1248,39 +1292,65 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
         await query.edit_message_text(buy_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
     
     elif action == "trunks":
-        # SIP Trunk Management - Auto-provisioned via MagnusBilling
+        # SIP Account Management - MagnusBilling powered
         trunks = await db.get_user_trunks(user_data['id'])
         magnus_info = await db.get_magnus_info(user.id)
         
-        trunks_text = "🔌 <b>My SIP Trunks</b>\n\n"
+        trunks_text = "📞 <b>SIP Account Management</b>\n\n"
         
-        if trunks:
-            for trunk in trunks:
-                status = "🟢" if trunk['status'] == 'active' else "🔴"
-                trunks_text += (
-                    f"{status} <b>{trunk['name']}</b>\n"
-                    f"   🌐 {trunk['sip_host']}:{trunk.get('sip_port', 5060)}\n"
-                    f"   👤 {trunk['sip_username']}\n"
-                    f"   🔗 <code>{trunk['pjsip_endpoint_name']}</code>\n\n"
-                )
+        if magnus_info and magnus_info.get('magnus_username'):
+            mb_username = magnus_info['magnus_username']
+            # Fetch live balance from MagnusBilling
+            try:
+                mb_balance = await magnus.get_user_balance(mb_username)
+                mb_user_data = await magnus.get_user_by_username(mb_username)
+                mb_row = mb_user_data.get('rows', [{}])[0] if mb_user_data.get('rows') else {}
+                plan_name = mb_row.get('idPlanname', 'N/A')
+                callerid = mb_row.get('callingcard_pin', 'Not Set')
+                status_icon = "🟢" if mb_row.get('active', '0') == '1' else "🔴"
+            except Exception:
+                mb_balance = 0.0
+                plan_name = "N/A"
+                callerid = "Not Set"
+                status_icon = "⚠️"
+            
+            trunks_text += (
+                f"{status_icon} <b>Account: </b><code>{mb_username}</code>\n"
+                f"💰 <b>Balance:</b> ${mb_balance:.4f}\n"
+                f"📋 <b>Plan:</b> {plan_name}\n"
+                f"📞 <b>Caller ID:</b> {callerid or 'Not Set'}\n"
+                f"🌐 <b>Host:</b> 64.95.13.23\n\n"
+            )
+            
+            if trunks:
+                for trunk in trunks:
+                    t_status = "🟢" if trunk['status'] == 'active' else "🔴"
+                    trunks_text += f"{t_status} Trunk: <code>{trunk['pjsip_endpoint_name']}</code>\n"
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("💰 View Balance", callback_data="mb_balance"),
+                    InlineKeyboardButton("💳 Add Credit", callback_data="mb_add_credit")
+                ],
+                [
+                    InlineKeyboardButton("📋 Change Plan", callback_data="mb_plans"),
+                    InlineKeyboardButton("📞 Change CID", callback_data="mb_change_cid")
+                ],
+            ]
+            
+            if trunks:
+                for trunk in trunks:
+                    keyboard.append([
+                        InlineKeyboardButton(f"🗑 Delete {trunk['name'][:20]}", callback_data=f"trunk_delete_{trunk['id']}")
+                    ])
+            
+            keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")])
         else:
             trunks_text += "No SIP account yet.\n\nGet your SIP account to start making calls!\n"
-        
-        keyboard = []
-        
-        if not magnus_info or not magnus_info.get('magnus_username'):
-            keyboard.append([InlineKeyboardButton("📞 Get SIP Account", callback_data="trunk_auto_create")])
-        else:
-            if not trunks:
-                keyboard.append([InlineKeyboardButton("📞 Activate SIP Account", callback_data="trunk_auto_create")])
-        
-        if trunks:
-            for trunk in trunks:
-                keyboard.append([
-                    InlineKeyboardButton(f"🗑 Delete {trunk['name'][:20]}", callback_data=f"trunk_delete_{trunk['id']}")
-                ])
-        
-        keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")])
+            keyboard = [
+                [InlineKeyboardButton("📞 Get SIP Account", callback_data="trunk_auto_create")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ]
         
         await query.edit_message_text(trunks_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
     
@@ -1579,8 +1649,205 @@ async def handle_trunk_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
 
 # =============================================================================
-# Lead Management Callbacks
+# MagnusBilling Account Management Callbacks
 # =============================================================================
+
+async def handle_mb_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle MagnusBilling account management callbacks"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = update.effective_user
+    data = query.data
+    
+    magnus_info = await db.get_magnus_info(user.id)
+    if not magnus_info or not magnus_info.get('magnus_username'):
+        await query.edit_message_text(
+            "❌ No SIP account found. Create one first.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📞 Get SIP Account", callback_data="trunk_auto_create")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
+        )
+        return
+    
+    mb_username = magnus_info['magnus_username']
+    mb_user_id = magnus_info.get('magnus_user_id', 0)
+    
+    if data == "mb_balance":
+        # View detailed balance
+        try:
+            mb_data = await magnus.get_user_by_username(mb_username)
+            mb_row = mb_data.get('rows', [{}])[0] if mb_data.get('rows') else {}
+            
+            credit = float(mb_row.get('credit', 0))
+            plan_name = mb_row.get('idPlanname', 'N/A')
+            callerid = mb_row.get('callingcard_pin', 'Not Set')
+            
+            text = (
+                "💰 <b>MagnusBilling Balance</b>\n\n"
+                f"👤 Account: <code>{mb_username}</code>\n"
+                f"💵 Balance: <b>${credit:.4f}</b>\n"
+                f"📋 Plan: {plan_name}\n"
+                f"📞 Caller ID: {callerid or 'Not Set'}\n"
+            )
+        except Exception as e:
+            text = f"❌ Could not fetch balance: {str(e)[:100]}"
+        
+        await query.edit_message_text(
+            text, parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Add Credit", callback_data="mb_add_credit")],
+                [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+            ])
+        )
+    
+    elif data == "mb_add_credit":
+        # Show credit packages for MagnusBilling top-up
+        buy_text = "💳 <b>Add Credit to SIP Account</b>\n\n"
+        buy_text += f"Account: <code>{mb_username}</code>\n\n"
+        keyboard = []
+        
+        for package_id, pkg in CREDIT_PACKAGES.items():
+            buy_text += f"📦 {pkg['credits']} Credits — ${pkg['price']} {pkg['currency']}\n"
+            keyboard.append([InlineKeyboardButton(
+                f"💳 Buy {pkg['credits']} Credits (${pkg['price']})",
+                callback_data=f"mb_buy_{package_id}"
+            )])
+        
+        buy_text += "\n✅ Payment via Oxapay → Credit added to MagnusBilling"
+        keyboard.append([InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")])
+        
+        await query.edit_message_text(buy_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif data.startswith("mb_buy_"):
+        # Create Oxapay payment and tag it for MB credit
+        package_id = data.replace("mb_buy_", "")
+        
+        if package_id not in CREDIT_PACKAGES:
+            await query.edit_message_text("❌ Invalid package.")
+            return
+        
+        package = CREDIT_PACKAGES[package_id]
+        user_data = await db.get_or_create_user(user.id)
+        
+        try:
+            payment = await oxapay.create_payment(
+                amount=package['price'],
+                currency=package['currency'],
+                order_id=f"mb_{user_data['id']}_{package_id}",
+                description=f"MB Credit: {package['credits']} for {mb_username}"
+            )
+            
+            if payment and payment.get('success'):
+                await db.create_payment(
+                    user_id=user_data['id'],
+                    track_id=payment['track_id'],
+                    amount=package['price'],
+                    credits=package['credits'],
+                    currency=package['currency'],
+                    payment_url=payment.get('payment_url', '')
+                )
+                
+                # Store that this payment is for MagnusBilling credit
+                context.user_data['mb_pending_payment'] = {
+                    'track_id': payment['track_id'],
+                    'credits': package['credits'],
+                    'mb_username': mb_username,
+                    'mb_user_id': mb_user_id,
+                }
+                
+                keyboard = [
+                    [InlineKeyboardButton("💳 Pay Now", url=payment.get('payment_url', ''))],
+                    [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")]
+                ]
+                
+                await query.edit_message_text(
+                    f"💳 <b>Payment Created</b>\n\n"
+                    f"Package: {package['credits']} Credits → MagnusBilling\n"
+                    f"Amount: ${package['price']} {package['currency']}\n"
+                    f"Account: <code>{mb_username}</code>\n\n"
+                    f"Click 'Pay Now' to complete payment.\n"
+                    f"Credits will be added to your SIP account automatically.",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                error = payment.get('error', 'Unknown error') if payment else 'No response'
+                await query.edit_message_text(f"❌ Payment failed: {error}")
+        except Exception as e:
+            logger.error(f"MB Payment error: {e}")
+            await query.edit_message_text(f"❌ Error: {e}")
+    
+    elif data == "mb_plans":
+        # Show available plans
+        try:
+            plans = await magnus.get_plans()
+            
+            text = "📋 <b>Change Billing Plan</b>\n\n"
+            keyboard = []
+            
+            if plans:
+                for plan in plans:
+                    plan_id = plan.get('id')
+                    plan_name = plan.get('name', 'Unknown')
+                    # Only show plans (filter for IVR-related if name contains IVR)
+                    text += f"• <b>{plan_name}</b> (ID: {plan_id})\n"
+                    keyboard.append([
+                        InlineKeyboardButton(f"📋 {plan_name}", callback_data=f"mb_setplan_{plan_id}")
+                    ])
+            else:
+                text += "No plans available."
+            
+            keyboard.append([InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")])
+            
+            await query.edit_message_text(text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            await query.edit_message_text(
+                f"❌ Could not fetch plans: {str(e)[:100]}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")]
+                ])
+            )
+    
+    elif data.startswith("mb_setplan_"):
+        # Change user's plan
+        plan_id = int(data.replace("mb_setplan_", ""))
+        try:
+            result = await magnus.change_plan(int(mb_user_id), plan_id)
+            if result.get('success'):
+                await query.edit_message_text(
+                    f"✅ <b>Plan changed successfully!</b>\n\nPlan ID: {plan_id}",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")],
+                        [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                    ])
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ Failed to change plan: {result}",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")]
+                    ])
+                )
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error: {str(e)[:200]}")
+    
+    elif data == "mb_change_cid":
+        # Ask user to input new Caller ID
+        context.user_data['awaiting_mb_cid'] = True
+        await query.edit_message_text(
+            "📞 <b>Change Caller ID</b>\n\n"
+            f"Account: <code>{mb_username}</code>\n\n"
+            "Enter the new Caller ID number:\n"
+            "Example: <code>12125551234</code>",
+            parse_mode='HTML'
+        )
+
+
+
 
 async def handle_lead_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle lead list add/delete callbacks"""
@@ -2019,6 +2286,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_start_campaign, pattern="^start_campaign_"))
     application.add_handler(CallbackQueryHandler(handle_campaign_setup, pattern="^camp_"))
     application.add_handler(CallbackQueryHandler(handle_trunk_callbacks, pattern="^trunk_"))
+    application.add_handler(CallbackQueryHandler(handle_mb_callbacks, pattern="^mb_"))
     application.add_handler(CallbackQueryHandler(handle_lead_callbacks, pattern="^lead_"))
     application.add_handler(CallbackQueryHandler(handle_admin_price_callback, pattern="^price_"))
     application.add_handler(CallbackQueryHandler(handle_menu_callbacks, pattern="^menu_"))

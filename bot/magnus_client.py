@@ -175,6 +175,39 @@ class MagnusBillingClient:
         })
         return result
 
+    async def get_plans(self) -> list:
+        """Get all available billing plans"""
+        result = await self._query({
+            'module': 'plan',
+            'action': 'read',
+            'page': 1,
+            'start': 0,
+            'limit': 100,
+        })
+        return result.get('rows', [])
+
+    async def change_plan(self, user_id: int, plan_id: int) -> dict:
+        """Change user's billing plan"""
+        result = await self._query({
+            'module': 'user',
+            'action': 'save',
+            'id': user_id,
+            'id_plan': plan_id,
+        })
+        logger.info(f"📋 MagnusBilling change_plan(user_id={user_id}, plan_id={plan_id}): {result}")
+        return result
+
+    async def update_callerid(self, user_id: int, callerid: str) -> dict:
+        """Update user's caller ID"""
+        result = await self._query({
+            'module': 'user',
+            'action': 'save',
+            'id': user_id,
+            'callingcard_pin': callerid,
+        })
+        logger.info(f"📞 MagnusBilling update_callerid(user_id={user_id}, cid={callerid}): {result}")
+        return result
+
     # =========================================================================
     # Test Connection
     # =========================================================================
