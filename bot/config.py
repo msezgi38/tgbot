@@ -13,16 +13,12 @@ TELEGRAM_BOT_TOKEN = "8419284355:AAFNUKJWVLXqtVIzwjbTW0Jq6dmyHkdxsqE"
 # Oxapay Payment Gateway Configuration
 # =============================================================================
 OXAPAY_API_KEY = "QSTFGZ-C3IXYJ-XCEWN6-GZZHAS"
-OXAPAY_API_URL = "https://api.oxapay.com/merchants/createInvoice"
+OXAPAY_API_URL = "https://api.oxapay.com/v1/payment/invoice"
 OXAPAY_WEBHOOK_URL = "http://195.85.114.55/webhook/oxapay"  # ⚠️ UPDATE THIS
 
 # Payment Configuration
-CREDIT_PACKAGES = {
-    "10": {"credits": 10, "price": 5.00, "currency": "USDT"},
-    "50": {"credits": 50, "price": 20.00, "currency": "USDT"},
-    "100": {"credits": 100, "price": 35.00, "currency": "USDT"},
-    "500": {"credits": 500, "price": 150.00, "currency": "USDT"},
-}
+MIN_TOPUP_AMOUNT = 50  # Minimum $50 USDT top-up
+DEFAULT_CURRENCY = "USDT"
 
 # =============================================================================
 # Database Configuration

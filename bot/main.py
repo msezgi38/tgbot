@@ -23,7 +23,7 @@ from telegram.ext import (
     filters
 )
 
-from config import TELEGRAM_BOT_TOKEN, CREDIT_PACKAGES, ADMIN_TELEGRAM_IDS, TEST_MODE, SUPPORTED_COUNTRY_CODES, ASTERISK_RELOAD_CMD
+from config import TELEGRAM_BOT_TOKEN, MIN_TOPUP_AMOUNT, DEFAULT_CURRENCY, ADMIN_TELEGRAM_IDS, TEST_MODE, SUPPORTED_COUNTRY_CODES, ASTERISK_RELOAD_CMD
 # Real PostgreSQL database - data persists across restarts
 from database import db
 from oxapay_handler import oxapay
@@ -278,58 +278,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =============================================================================
 
 async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle buy package callback"""
+    """Handle buy/topup - not used with new custom amount flow"""
     query = update.callback_query
     await query.answer()
-    
-    package_id = query.data.replace("buy_", "")
-    
-    if package_id not in CREDIT_PACKAGES:
-        await query.edit_message_text("❌ Invalid package.")
-        return
-    
-    package = CREDIT_PACKAGES[package_id]
-    user = update.effective_user
-    user_data = await db.get_or_create_user(user.id)
-    
-    try:
-        payment = await oxapay.create_payment(
-            amount=package['price'],
-            currency=package['currency'],
-            order_id=f"user_{user_data['id']}_{package_id}",
-            description=f"{package['credits']} credits for {user.username or user.id}"
-        )
-        
-        if payment and payment.get('success'):
-            await db.create_payment(
-                user_id=user_data['id'],
-                track_id=payment['track_id'],
-                amount=package['price'],
-                credits=package['credits'],
-                currency=package['currency'],
-                payment_url=payment.get('payment_url', '')
-            )
-            
-            keyboard = [
-                [InlineKeyboardButton("💳 Pay Now", url=payment.get('payment_url', ''))],
-                [InlineKeyboardButton("🔙 Back", callback_data="menu_main")]
-            ]
-            
-            await query.edit_message_text(
-                f"💳 <b>Payment Created</b>\n\n"
-                f"Package: {package['credits']} Credits\n"
-                f"Amount: ${package['price']} {package['currency']}\n\n"
-                f"Click 'Pay Now' to complete your payment.",
-                parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        else:
-            error = payment.get('error', 'Unknown error') if payment else 'No response'
-            logger.error(f"❌ Oxapay payment failed: {error}")
-            await query.edit_message_text(f"❌ Payment failed: {error}")
-    except Exception as e:
-        logger.error(f"Payment error: {e}")
-        await query.edit_message_text(f"❌ Error: {e}")
+    # Redirect to SIP Account for credit management
+    query.data = "menu_trunks"
+    await handle_menu_callbacks(update, context)
 
 
 # =============================================================================
@@ -460,6 +414,90 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("❌ No SIP account found.")
         except Exception as e:
+            await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
+        return
+    
+    # --- Handle MagnusBilling top-up amount input ---
+    if context.user_data.get('awaiting_topup_amount'):
+        text = update.message.text.strip().replace('$', '').replace(',', '')
+        context.user_data['awaiting_topup_amount'] = False
+        
+        try:
+            amount = float(text)
+        except ValueError:
+            await update.message.reply_text(
+                f"❌ Invalid amount. Enter a number (minimum ${MIN_TOPUP_AMOUNT}).\nExample: <code>50</code>",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")]
+                ])
+            )
+            return
+        
+        if amount < MIN_TOPUP_AMOUNT:
+            await update.message.reply_text(
+                f"❌ Minimum top-up is <b>${MIN_TOPUP_AMOUNT}</b>.\nYou entered: ${amount:.2f}",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Try Again", callback_data="mb_add_credit")],
+                    [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")]
+                ])
+            )
+            return
+        
+        mb_username = context.user_data.get('topup_mb_username', '')
+        mb_user_id = context.user_data.get('topup_mb_user_id', 0)
+        user_data = await db.get_or_create_user(user.id)
+        
+        try:
+            payment = await oxapay.create_payment(
+                amount=amount,
+                currency=DEFAULT_CURRENCY,
+                order_id=f"mb_{user_data['id']}_{int(amount)}",
+                description=f"SIP Credit ${amount} for {mb_username}"
+            )
+            
+            if payment and payment.get('success'):
+                await db.create_payment(
+                    user_id=user_data['id'],
+                    track_id=payment['track_id'],
+                    amount=amount,
+                    credits=amount,
+                    currency=DEFAULT_CURRENCY,
+                    payment_url=payment.get('payment_url', '')
+                )
+                
+                context.user_data['mb_pending_payment'] = {
+                    'track_id': payment['track_id'],
+                    'amount': amount,
+                    'mb_username': mb_username,
+                    'mb_user_id': mb_user_id,
+                }
+                
+                await update.message.reply_text(
+                    f"💳 <b>Payment Created</b>\n\n"
+                    f"Amount: <b>${amount:.2f}</b> {DEFAULT_CURRENCY}\n"
+                    f"Account: <code>{mb_username}</code>\n\n"
+                    f"Click 'Pay Now' to complete payment.\n"
+                    f"Credit will be added to your SIP account automatically.",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💳 Pay Now", url=payment.get('payment_url', ''))],
+                        [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")]
+                    ])
+                )
+            else:
+                error = payment.get('error', 'Unknown error') if payment else 'No response'
+                logger.error(f"❌ Oxapay payment failed: {error}")
+                await update.message.reply_text(
+                    f"❌ Payment failed: {error}",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💳 Try Again", callback_data="mb_add_credit")],
+                        [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")]
+                    ])
+                )
+        except Exception as e:
+            logger.error(f"Payment error: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
         return
     
@@ -1246,50 +1284,57 @@ Campaigns: {stats.get('campaign_count', 0)} | Total Calls: {user_data.get('total
         )
     
     elif action == "balance":
-        stats = await db.get_user_stats(user.id)
-        credits = stats.get('credits', 0) if stats else 0
+        # Show MagnusBilling balance (live from API)
+        magnus_info = await db.get_magnus_info(user.id)
         
-        if credits > 100: credit_status = "🟢 Excellent"
-        elif credits > 50: credit_status = "🟡 Good"
-        elif credits > 10: credit_status = "🟠 Low"
-        else: credit_status = "🔴 Critical"
-        
-        balance_text = f"""
-💰 <b>Account Balance</b>
-
-<b>Status:</b> {credit_status}
-<b>Credits:</b> {credits:.2f}
-
-<b>Stats:</b>
-💵 Spent: ${stats.get('total_spent', 0):.2f}
-📞 Calls: {stats.get('total_calls', 0)}
-📊 Campaigns: {stats.get('campaign_count', 0)}
-🔌 Trunks: {stats.get('trunk_count', 0)}
-📋 Leads: {stats.get('lead_count', 0)}
-"""
+        if magnus_info and magnus_info.get('magnus_username'):
+            mb_username = magnus_info['magnus_username']
+            try:
+                mb_balance = await magnus.get_user_balance(mb_username)
+                mb_data = await magnus.get_user_by_username(mb_username)
+                mb_row = mb_data.get('rows', [{}])[0] if mb_data.get('rows') else {}
+                plan_name = mb_row.get('idPlanname', 'N/A')
+                callerid = mb_row.get('callingcard_pin', 'Not Set')
+                
+                if mb_balance > 100: credit_status = "🟢 Excellent"
+                elif mb_balance > 50: credit_status = "🟡 Good"
+                elif mb_balance > 10: credit_status = "🟠 Low"
+                else: credit_status = "🔴 Critical"
+                
+                balance_text = (
+                    f"💰 <b>Account Balance</b>\n\n"
+                    f"<b>Status:</b> {credit_status}\n"
+                    f"<b>Balance:</b> ${mb_balance:.4f}\n"
+                    f"<b>Plan:</b> {plan_name}\n"
+                    f"<b>Account:</b> <code>{mb_username}</code>\n"
+                )
+            except Exception as e:
+                balance_text = f"💰 <b>Account Balance</b>\n\n⚠️ Could not fetch balance: {str(e)[:100]}"
+        else:
+            balance_text = "💰 <b>Account Balance</b>\n\nNo SIP account yet. Create one to see your balance."
         
         keyboard = [
-            [InlineKeyboardButton("💳 Buy Credits", callback_data="menu_buy")],
+            [InlineKeyboardButton("💳 Add Credit", callback_data="mb_add_credit")],
+            [InlineKeyboardButton("📞 SIP Account", callback_data="menu_trunks")],
             [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
         ]
         
         await query.edit_message_text(balance_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
     
     elif action == "buy":
-        buy_text = "💳 <b>Purchase Credits</b>\n\n"
-        keyboard = []
-        
-        for package_id, pkg in CREDIT_PACKAGES.items():
-            buy_text += f"📦 {pkg['credits']} Credits — ${pkg['price']} {pkg['currency']}\n"
-            keyboard.append([InlineKeyboardButton(
-                f"Select {pkg['credits']} Credits",
-                callback_data=f"buy_{package_id}"
-            )])
-        
-        buy_text += "\n✅ Secure payments via Oxapay\n✅ Instant delivery"
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_main")])
-        
-        await query.edit_message_text(buy_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+        # Redirect to SIP Account > Add Credit
+        magnus_info = await db.get_magnus_info(user.id)
+        if magnus_info and magnus_info.get('magnus_username'):
+            query.data = "mb_add_credit"
+            await handle_mb_callbacks(update, context)
+        else:
+            await query.edit_message_text(
+                "❌ Create a SIP account first to add credits.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📞 Get SIP Account", callback_data="trunk_auto_create")],
+                    [InlineKeyboardButton("🔙 Main Menu", callback_data="menu_main")]
+                ])
+            )
     
     elif action == "trunks":
         # SIP Account Management - MagnusBilling powered
@@ -1690,81 +1735,18 @@ async def handle_mb_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     
     elif data == "mb_add_credit":
-        # Show credit packages for MagnusBilling top-up
-        buy_text = "💳 <b>Add Credit to SIP Account</b>\n\n"
-        buy_text += f"Account: <code>{mb_username}</code>\n\n"
-        keyboard = []
+        # Prompt user to enter custom amount
+        context.user_data['awaiting_topup_amount'] = True
+        context.user_data['topup_mb_username'] = mb_username
+        context.user_data['topup_mb_user_id'] = mb_user_id
         
-        for package_id, pkg in CREDIT_PACKAGES.items():
-            buy_text += f"📦 {pkg['credits']} Credits — ${pkg['price']} {pkg['currency']}\n"
-            keyboard.append([InlineKeyboardButton(
-                f"💳 Buy {pkg['credits']} Credits (${pkg['price']})",
-                callback_data=f"mb_buy_{package_id}"
-            )])
-        
-        buy_text += "\n✅ Payment via Oxapay → Credit added to MagnusBilling"
-        keyboard.append([InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")])
-        
-        await query.edit_message_text(buy_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
-    
-    elif data.startswith("mb_buy_"):
-        # Create Oxapay payment and tag it for MB credit
-        package_id = data.replace("mb_buy_", "")
-        
-        if package_id not in CREDIT_PACKAGES:
-            await query.edit_message_text("❌ Invalid package.")
-            return
-        
-        package = CREDIT_PACKAGES[package_id]
-        user_data = await db.get_or_create_user(user.id)
-        
-        try:
-            payment = await oxapay.create_payment(
-                amount=package['price'],
-                currency=package['currency'],
-                order_id=f"mb_{user_data['id']}_{package_id}",
-                description=f"MB Credit: {package['credits']} for {mb_username}"
-            )
-            
-            if payment and payment.get('success'):
-                await db.create_payment(
-                    user_id=user_data['id'],
-                    track_id=payment['track_id'],
-                    amount=package['price'],
-                    credits=package['credits'],
-                    currency=package['currency'],
-                    payment_url=payment.get('payment_url', '')
-                )
-                
-                # Store that this payment is for MagnusBilling credit
-                context.user_data['mb_pending_payment'] = {
-                    'track_id': payment['track_id'],
-                    'credits': package['credits'],
-                    'mb_username': mb_username,
-                    'mb_user_id': mb_user_id,
-                }
-                
-                keyboard = [
-                    [InlineKeyboardButton("💳 Pay Now", url=payment.get('payment_url', ''))],
-                    [InlineKeyboardButton("🔙 SIP Account", callback_data="menu_trunks")]
-                ]
-                
-                await query.edit_message_text(
-                    f"💳 <b>Payment Created</b>\n\n"
-                    f"Package: {package['credits']} Credits → MagnusBilling\n"
-                    f"Amount: ${package['price']} {package['currency']}\n"
-                    f"Account: <code>{mb_username}</code>\n\n"
-                    f"Click 'Pay Now' to complete payment.\n"
-                    f"Credits will be added to your SIP account automatically.",
-                    parse_mode='HTML',
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            else:
-                error = payment.get('error', 'Unknown error') if payment else 'No response'
-                await query.edit_message_text(f"❌ Payment failed: {error}")
-        except Exception as e:
-            logger.error(f"MB Payment error: {e}")
-            await query.edit_message_text(f"❌ Error: {e}")
+        await query.edit_message_text(
+            f"💳 <b>Add Credit to SIP Account</b>\n\n"
+            f"Account: <code>{mb_username}</code>\n\n"
+            f"Enter the amount in USD (minimum ${MIN_TOPUP_AMOUNT}):\n"
+            f"Example: <code>50</code> or <code>100</code>",
+            parse_mode='HTML'
+        )
     
     elif data == "mb_plans":
         # Show available plans

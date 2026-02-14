@@ -1,7 +1,7 @@
 # =============================================================================
 # Oxapay Payment Handler
 # =============================================================================
-# Integration with Oxapay cryptocurrency payment gateway
+# Integration with Oxapay cryptocurrency payment gateway (v1 API)
 # =============================================================================
 
 import aiohttp
@@ -11,14 +11,14 @@ import uuid
 from typing import Dict, Optional
 from datetime import datetime
 
-from config import OXAPAY_API_KEY, OXAPAY_API_URL, OXAPAY_WEBHOOK_URL, CREDIT_PACKAGES
+from config import OXAPAY_API_KEY, OXAPAY_API_URL, OXAPAY_WEBHOOK_URL
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class OxapayHandler:
-    """Oxapay payment gateway integration"""
+    """Oxapay payment gateway integration (v1 API)"""
     
     def __init__(self):
         self.api_key = OXAPAY_API_KEY
@@ -33,7 +33,7 @@ class OxapayHandler:
         description: Optional[str] = None
     ) -> Dict:
         """
-        Create payment request with Oxapay
+        Create payment invoice with Oxapay v1 API
         
         Returns:
             {
@@ -53,7 +53,7 @@ class OxapayHandler:
             "currency": currency,
             "orderId": order_id,
             "callbackUrl": self.webhook_url,
-            "description": description or "IVR Bot Credits",
+            "description": description or f"SIP Credit Top-up ${amount}",
             "returnUrl": "https://t.me/callnowp1_bot",
         }
         
@@ -62,8 +62,9 @@ class OxapayHandler:
                 async with session.post(self.api_url, json=payload) as response:
                     data = await response.json()
                     
+                    logger.info(f"Oxapay response: status={response.status}, data={data}")
+                    
                     if response.status == 200 and data.get('result') == 100:
-                        # Success
                         result = {
                             'success': True,
                             'track_id': data.get('trackId'),
@@ -76,9 +77,8 @@ class OxapayHandler:
                         logger.info(f"✅ Payment created: {result['track_id']}")
                         return result
                     else:
-                        # Error
-                        error_msg = data.get('message', 'Unknown error')
-                        logger.error(f"❌ Oxapay error: {error_msg}")
+                        error_msg = data.get('message', f"HTTP {response.status}")
+                        logger.error(f"❌ Oxapay error: {error_msg} | Full response: {data}")
                         return {
                             'success': False,
                             'error': error_msg
@@ -92,48 +92,9 @@ class OxapayHandler:
             }
     
     def verify_webhook(self, data: Dict) -> bool:
-        """
-        Verify webhook authenticity
-        
-        Oxapay sends a signature to verify the webhook is genuine
-        """
-        # Oxapay verification logic here
-        # Check their documentation for exact verification method
+        """Verify webhook authenticity"""
         return True  # Simplified for now
-    
-    def get_credit_package(self, package_id: str) -> Optional[Dict]:
-        """Get credit package details"""
-        return CREDIT_PACKAGES.get(package_id)
-    
-    def list_packages(self) -> Dict:
-        """Get all available credit packages"""
-        return CREDIT_PACKAGES
 
 
 # Global instance
 oxapay = OxapayHandler()
-
-
-# =============================================================================
-# Example Usage
-# =============================================================================
-async def test_payment():
-    """Test payment creation"""
-    handler = OxapayHandler()
-    
-    result = await handler.create_payment(
-        amount=5.00,
-        currency="USDT",
-        description="10 credits"
-    )
-    
-    if result['success']:
-        print(f"Payment URL: {result['payment_url']}")
-        print(f"Track ID: {result['track_id']}")
-    else:
-        print(f"Error: {result['error']}")
-
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(test_payment())
